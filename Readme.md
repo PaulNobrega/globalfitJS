@@ -44,12 +44,12 @@ Code has been adapted from the original fortran project Savuka: https://osmanbil
   <!-- ... your HTML content ... -->
 
   <!-- Load the library files -->
-  <script src="path/to/svd.js"></script>
-  <script src="path/to/globalfit.js"></script>
+  <!-- <script src="path/to/svd.js"></script> -->
+  <!-- <script src="path/to/globalfit.js"></script> -->
   <!-- OR -->
-  <!-- <script src="path/to/lm-fitter.js"></script> -->
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.0/dist/globalfit.min.js"></script>
   <!-- OR -->
-  <!-- <script src="https://your-cdn-path/lm-fitter.js"></script> -->
+  <!-- <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.0/dist/globalfit.js"></script> -->
 
   <script>
     // Your code to use lmFitGlobal here
