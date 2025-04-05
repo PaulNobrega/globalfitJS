@@ -13,9 +13,6 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
 ```html
   <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/svd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/globalfit.min.js"></script>
-  <!-- OR for non-minified (ensure svd.js loads first) -->
-  <!-- <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/svd.js"></script> -->
-  <!-- <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/globalfit.js"></script> -->
 ```
 ## Features
 
