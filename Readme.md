@@ -8,6 +8,14 @@ Code has been adapted from the original fortran project Savuka: https://osmanbil
 
 **Version:** 1.2.0
 
+
+## CDN Script Tags
+```html
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.0/dist/globalfit.min.js"></script>
+  <!-- OR -->
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.0/dist/globalfit.js"></script>
+```
+
 ## Features
 
 - **Global Fitting:** Fit multiple datasets simultaneously with shared or independent parameters.
