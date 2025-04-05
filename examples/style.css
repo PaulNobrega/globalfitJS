@@ -78,3 +78,36 @@ canvas {
     display: none;
     /* ------------------------------------------- */
 }
+
+.fix-checkbox {
+    display: inline-block;
+    margin: 0;
+    transform: scale(1.2); /* Slightly enlarge for better visibility */
+}
+
+.text-center.align-middle {
+    vertical-align: middle;
+    text-align: center;
+}
+
+.d-flex {
+    display: flex;
+}
+
+.justify-content-center {
+    justify-content: center;
+}
+
+.align-items-center {
+    align-items: center;
+}
+
+.form-check {
+    padding-left: 0;
+}
+
+.form-check-input {
+    margin-top: 0;
+    margin-left: 0;
+    position: static;
+}

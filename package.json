@@ -1,6 +1,6 @@
 {
   "name": "globalfitjs",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Levenberg-Marquardt global fitter in pure JS",
   "main": "dist/globalfit.js",
   "files": [

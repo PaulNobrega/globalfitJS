@@ -1,5 +1,3 @@
-// globalfit.js
-
 /**
  * @fileoverview Provides Levenberg-Marquardt fitting functions:
  *   - lmFitGlobal: For simultaneous fitting of multiple datasets with linking/fixing.
@@ -8,7 +6,7 @@
  * Includes helpers for parameter mapping, chi-squared calculation, Jacobian calculation,
  * constraint application, and statistics calculation.
  * Depends on svd.js for linear algebra operations.
- * Version: 1.2.0
+ * Version: 1.2.5 (Uses fixMap-style linkMap, adds covariance regularization, uses Math.abs for StdErr)
  */
 
 (function(global) {
@@ -68,77 +66,166 @@
         } return hessian;
     }
 
+    // ============================================================================
+    // *** MAPPING LOGIC (v1.4.3 style - Corrected for new linkMap) ***
+    // ============================================================================
+
     /**
      * Creates mapping between full parameter structure and the flat array of active parameters.
      * Internal helper function for lmFitGlobal.
+     * @param {number[][][]} initialParameters
+     * @param {(number|string|null)[][][]} linkMapInput - NEW: Nested array matching initialParameters, values are group IDs or null.
+     * @param {boolean[][][]} fixMapInput
+     * @param {Function} logFn
      * @private
      */
-    function setupParameterMapping(initialParameters, linkMap, fixMapInput, logFn) {
-        logFn("--- Running setupParameterMapping ---", 'debug');
-        logFn(`Received linkMap: ${JSON.stringify(linkMap)}`, 'debug');
+    function setupParameterMapping(initialParameters, linkMapInput, fixMapInput, logFn) {
+        logFn("--- Running setupParameterMapping (New linkMap structure v1.4.3 logic) ---", 'debug');
+        logFn(`Received linkMapInput (structure like fixMap): ${linkMapInput ? 'Provided' : 'Null'}`, 'debug');
         logFn(`Received fixMapInput: ${JSON.stringify(fixMapInput)}`, 'debug');
 
-        const paramStructure = []; const flatInitialParams = []; const paramCoordinates = []; let currentFlatIndex = 0;
-        const fixMap = fixMapInput ? JSON.parse(JSON.stringify(fixMapInput)) : [];
+        // --- 1. Flatten Parameters and Create Coordinate Mapping ---
+        const paramStructure = [];
+        const flatInitialParams = [];
+        const paramCoordinates = []; // Stores [[dsIdx, pIdx], vIdx] for each flat index
+        let currentFlatIndex = 0;
+        const fixMap = fixMapInput ? JSON.parse(JSON.stringify(fixMapInput)) : []; // Deep copy or empty
+        const linkMap = linkMapInput ? JSON.parse(JSON.stringify(linkMapInput)) : null; // Deep copy or null
+
         initialParameters.forEach((dsParams, dsIdx) => {
-            paramStructure.push([]); if (!fixMap[dsIdx]) fixMap[dsIdx] = [];
+            paramStructure.push([]);
+            if (!fixMap[dsIdx]) fixMap[dsIdx] = [];
             dsParams.forEach((pArray, pIdx) => {
-                paramStructure[dsIdx].push(pArray.length); if (!fixMap[dsIdx][pIdx]) fixMap[dsIdx][pIdx] = new Array(pArray.length).fill(false);
+                paramStructure[dsIdx].push(pArray.length);
+                if (!fixMap[dsIdx][pIdx]) fixMap[dsIdx][pIdx] = new Array(pArray.length).fill(false);
                 pArray.forEach((pValue, vIdx) => {
-                    flatInitialParams.push(pValue); paramCoordinates.push([[dsIdx, pIdx], vIdx]);
+                    flatInitialParams.push(pValue);
+                    // Store coordinates based on the ORIGINAL initialParameters structure
+                    paramCoordinates.push([[dsIdx, pIdx], vIdx]);
                     if (fixMap[dsIdx][pIdx].length <= vIdx) fixMap[dsIdx][pIdx][vIdx] = false;
                     currentFlatIndex++;
                 });
             });
         });
-        const nTotalParams = flatInitialParams.length; const masterMap = new Array(nTotalParams).fill(-1); const isFixed = new Array(nTotalParams).fill(false);
+
+        const nTotalParams = flatInitialParams.length;
+        const masterMap = new Array(nTotalParams).fill(-1); // Ensure initialized
+        const isFixed = new Array(nTotalParams).fill(false); // Ensure initialized
         const activeParamInfo = []; const activeInitialParams = []; const activeParamLabels = [];
 
-        // 2. Apply fixMap
-        paramCoordinates.forEach((coord, flatIdx) => { const [[dsIdx, paramIdx], valIdx] = coord; if (fixMap[dsIdx]?.[paramIdx]?.[valIdx] === true) isFixed[flatIdx] = true; });
-        logFn(`Initial isFixed array: ${JSON.stringify(isFixed)}`, 'debug');
-
-        // 3. Process linkMap
-        const linkGroups = linkMap || [];
-        linkGroups.forEach((group, groupIdx) => {
-            logFn(`Processing Link Group ${groupIdx}: ${JSON.stringify(group)}`, 'debug');
-            let masterFlatIndex = -1; let masterCoord = null;
-            for (const coord of group) {
-                const [[dsIdx, paramIdx], valIdx] = coord;
-                const flatIdx = paramCoordinates.findIndex(c => c[0][0] === dsIdx && c[0][1] === paramIdx && c[1] === valIdx);
-                if (flatIdx !== -1) { if (!isFixed[flatIdx]) { masterFlatIndex = flatIdx; masterCoord = coord; break; } }
-                else logFn(`Coordinate ${JSON.stringify(coord)} in linkMap not found.`, 'warn');
-            }
-            if (masterFlatIndex === -1 && group.length > 0) {
-                const firstCoord = group[0]; const firstFlatIdx = paramCoordinates.findIndex(c => c[0][0] === firstCoord[0][0] && c[0][1] === firstCoord[0][1] && c[1] === firstCoord[1]);
-                if (firstFlatIdx !== -1) {
-                    masterFlatIndex = firstFlatIdx;
-                    logFn(`Link Group ${groupIdx} seems fixed, master set to flat index ${masterFlatIndex}`, 'debug');
-                    group.forEach(coord => {
-                        const flatIdx = paramCoordinates.findIndex(c => c[0][0] === coord[0][0] && c[0][1] === coord[0][1] && c[1] === coord[1]);
-                        if (flatIdx !== -1 && flatIdx !== masterFlatIndex) {
-                            if (!isFixed[flatIdx]) { logFn(`Marking ${JSON.stringify(coord)} as fixed due to fixed link group.`, 'debug'); isFixed[flatIdx] = true; }
-                            masterMap[flatIdx] = masterFlatIndex;
-                        }
-                    });
-                } else logFn(`Could not find fixed parameter for link group ${JSON.stringify(firstCoord)}`, 'warn');
-            } else if (masterFlatIndex !== -1) {
-                 logFn(`Link Group ${groupIdx} master: ${JSON.stringify(masterCoord)} (flat index ${masterFlatIndex})`, 'debug');
-                group.forEach(coord => {
-                    const flatIdx = paramCoordinates.findIndex(c => c[0][0] === coord[0][0] && c[0][1] === coord[0][1] && c[1] === coord[1]);
-                    if (flatIdx !== -1 && flatIdx !== masterFlatIndex) {
-                        if (isFixed[flatIdx]) { logFn(`Linking overrides fixed status for ${JSON.stringify(coord)}.`, 'warn'); isFixed[flatIdx] = false; }
-                        masterMap[flatIdx] = masterFlatIndex;
-                        flatInitialParams[flatIdx] = flatInitialParams[masterFlatIndex];
-                        logFn(`  Linked slave ${JSON.stringify(coord)} (flat ${flatIdx}) to master ${masterFlatIndex}`, 'debug');
-                    }
-                });
+        // --- 2. Apply fixMap ---
+        // Use paramCoordinates which maps flatIdx -> original coordinate
+        paramCoordinates.forEach((coord, flatIdx) => {
+            const [[dsIdx, paramIdx], valIdx] = coord;
+            if (fixMap[dsIdx]?.[paramIdx]?.[valIdx] === true) {
+                isFixed[flatIdx] = true;
             }
         });
-        logFn(`Final isFixed array: ${JSON.stringify(isFixed)}`, 'debug');
+        logFn(`Initial isFixed array (after fixMap): ${JSON.stringify(isFixed)}`, 'debug');
+
+        // --- 3. Process linkMap (NEW STRUCTURE LOGIC - v1.4.3 style) ---
+        const linkGroupsById = {}; // { groupId: [flatIdx1, flatIdx2, ...], ... }
+
+        if (linkMap) {
+            // Iterate through the structure of linkMapInput, which should match the structure of initialParameters
+            linkMap.forEach((dsLinkMap, dsLinkIdx) => {
+                if (!dsLinkMap || dsLinkIdx >= initialParameters.length) return; // Skip if dataset doesn't exist in params
+                dsLinkMap.forEach((modelLinkMap, modelLinkIdx) => {
+                    if (!modelLinkMap || modelLinkIdx >= initialParameters[dsLinkIdx].length) return; // Skip if model group doesn't exist
+                    modelLinkMap.forEach((groupId, paramLinkIdx) => {
+                         if (paramLinkIdx >= initialParameters[dsLinkIdx][modelLinkIdx].length) return; // Skip if param index is out of bounds
+
+                        if (groupId !== null && groupId !== undefined && groupId !== '') {
+                            // Find the corresponding flatIndex using paramCoordinates by matching coordinates
+                            const targetCoord = [dsLinkIdx, modelLinkIdx, paramLinkIdx];
+                            const flatIdx = paramCoordinates.findIndex(pc =>
+                                pc[0][0] === targetCoord[0] &&
+                                pc[0][1] === targetCoord[1] &&
+                                pc[1] === targetCoord[2]
+                            );
+
+                            if (flatIdx !== -1) {
+                                if (!linkGroupsById[groupId]) {
+                                    linkGroupsById[groupId] = [];
+                                }
+                                linkGroupsById[groupId].push(flatIdx);
+                            } else {
+                                // This case should ideally not happen if initialParameters and linkMapInput are consistent
+                                logFn(`Could not find flat index for link coordinate [${targetCoord.join(', ')}]`, 'warn');
+                            }
+                        }
+                    });
+                });
+            });
+            logFn(`Collected Link Groups by ID: ${JSON.stringify(linkGroupsById)}`, 'debug'); // Log collected groups
+
+            // Process collected groups
+            Object.entries(linkGroupsById).forEach(([groupId, flatIndices]) => {
+                if (flatIndices.length < 2) {
+                    logFn(`Link Group ${groupId} has only one member (${flatIndices[0]}). Ignoring link.`, 'debug');
+                    return;
+                }
+                logFn(`Processing Link Group ${groupId}: Flat indices ${JSON.stringify(flatIndices)}`, 'debug');
+
+                let masterFlatIndex = -1;
+                let masterCoord = null;
+                let allInitiallyFixed = true;
+
+                for (const flatIdx of flatIndices) {
+                    if (flatIdx < 0 || flatIdx >= nTotalParams) { logFn(`  Invalid flat index ${flatIdx} found in link group ${groupId}. Skipping.`, 'warn'); continue; }
+                    if (!isFixed[flatIdx]) {
+                        allInitiallyFixed = false;
+                        if (masterFlatIndex === -1) { masterFlatIndex = flatIdx; masterCoord = paramCoordinates[flatIdx]; }
+                    }
+                }
+
+                if (allInitiallyFixed) {
+                    masterFlatIndex = flatIndices[0];
+                    if (masterFlatIndex < 0 || masterFlatIndex >= nTotalParams) { logFn(`  Invalid nominal master index ${masterFlatIndex} for fixed group ${groupId}. Skipping group.`, 'warn'); return; }
+                    logFn(`  Link Group ${groupId} consists entirely of initially fixed parameters. Nominal master: flat index ${masterFlatIndex}`, 'debug');
+                    if (!isFixed[masterFlatIndex]) {
+                         logFn(`  Marking nominal master ${JSON.stringify(paramCoordinates[masterFlatIndex])} (flat ${masterFlatIndex}) as fixed because entire group is fixed.`, 'debug');
+                         isFixed[masterFlatIndex] = true;
+                    }
+                    flatIndices.forEach(flatIdx => {
+                         if (flatIdx < 0 || flatIdx >= nTotalParams) return;
+                        if (flatIdx !== masterFlatIndex) {
+                            masterMap[flatIdx] = masterFlatIndex;
+                            flatInitialParams[flatIdx] = flatInitialParams[masterFlatIndex];
+                            logFn(`    Linked fixed slave ${JSON.stringify(paramCoordinates[flatIdx])} (flat ${flatIdx}) to fixed master ${masterFlatIndex}. State: isFixed=${isFixed[flatIdx]}, masterMap=${masterMap[flatIdx]}`, 'debug');
+                        } else {
+                             logFn(`    Nominal Master ${JSON.stringify(paramCoordinates[flatIdx])} (flat ${flatIdx}). State: isFixed=${isFixed[flatIdx]}, masterMap=${masterMap[flatIdx]}`, 'debug');
+                        }
+                    });
+                }
+                else if (masterFlatIndex !== -1) {
+                    logFn(`  Link Group ${groupId} master: ${JSON.stringify(masterCoord)} (flat index ${masterFlatIndex})`, 'debug');
+                    logFn(`    Master ${JSON.stringify(paramCoordinates[masterFlatIndex])} (flat ${masterFlatIndex}). State: isFixed=${isFixed[masterFlatIndex]}, masterMap=${masterMap[masterFlatIndex]}`, 'debug');
+                    flatIndices.forEach(flatIdx => {
+                         if (flatIdx < 0 || flatIdx >= nTotalParams) return;
+                        if (flatIdx !== masterFlatIndex) {
+                            const initiallyFixed = isFixed[flatIdx];
+                            if (isFixed[flatIdx]) {
+                                logFn(`    Linking overrides fixed status for ${JSON.stringify(paramCoordinates[flatIdx])} (flat ${flatIdx}).`, 'warn');
+                                isFixed[flatIdx] = false;
+                            }
+                            masterMap[flatIdx] = masterFlatIndex;
+                            flatInitialParams[flatIdx] = flatInitialParams[masterFlatIndex];
+                            logFn(`    Linked slave ${JSON.stringify(paramCoordinates[flatIdx])} (flat ${flatIdx}) to master ${masterFlatIndex}. InitialFixed=${initiallyFixed}. Final State: isFixed=${isFixed[flatIdx]}, masterMap=${masterMap[flatIdx]}`, 'debug');
+                        }
+                    });
+                } else {
+                     logFn(`  Internal Logic Error: Could not determine master type for group ${groupId}.`, 'error');
+                }
+            });
+        } else {
+            logFn("No linkMap provided or linkMap is null.", 'debug');
+        }
+
+        logFn(`Final isFixed array (after linking): ${JSON.stringify(isFixed)}`, 'debug');
         logFn(`Final masterMap array: ${JSON.stringify(masterMap)}`, 'debug');
 
-        // 4. Identify active parameters
+        // --- 4. Identify active parameters ---
         let activeIndex = 0;
         for (let i = 0; i < nTotalParams; i++) {
             if (!isFixed[i] && masterMap[i] === -1) {
@@ -150,12 +237,12 @@
         logFn(`Identified ${totalActiveParams} active parameters: ${JSON.stringify(activeParamLabels)}`, 'debug');
         logFn(`Active Initial Params: ${JSON.stringify(activeInitialParams)}`, 'debug');
 
-        // 5. Create the reconstruction function
+        // --- 5. Create the reconstruction function ---
         const reconstructParams = (activeParamsCurrent) => {
             if (activeParamsCurrent.length !== totalActiveParams) throw new Error(`reconstructParams expects ${totalActiveParams} params, received ${activeParamsCurrent.length}`);
             const reconstructedFlat = [...flatInitialParams];
             activeParamInfo.forEach((info, actIdx) => { if (actIdx >= activeParamsCurrent.length) throw new Error(`Mismatch activeParamInfo/activeParams.`); reconstructedFlat[info.flatIndex] = activeParamsCurrent[actIdx]; });
-            for (let i = 0; i < nTotalParams; i++) { if (masterMap[i] !== -1) { if (masterMap[i] >= reconstructedFlat.length) throw new Error(`Master index ${masterMap[i]} out of bounds.`); reconstructedFlat[i] = reconstructedFlat[masterMap[i]]; } }
+            for (let i = 0; i < nTotalParams; i++) { if (masterMap[i] !== -1) { if (masterMap[i] < 0 || masterMap[i] >= reconstructedFlat.length) throw new Error(`Master index ${masterMap[i]} out of bounds.`); reconstructedFlat[i] = reconstructedFlat[masterMap[i]]; } }
             const nestedParams = []; let currentFlatIdx_recon = 0;
             paramStructure.forEach((dsStruct, dsIdx) => {
                 nestedParams[dsIdx] = [];
@@ -168,18 +255,16 @@
             return nestedParams;
         };
 
-        // Return details needed for error reconstruction as well
         return {
             activeInitialParams, reconstructParams, activeParamInfo, totalActiveParams,
             paramStructure, activeParamLabels,
-            // Internal details needed later:
             isFixed, masterMap, paramCoordinates, nTotalParams
         };
-    } // <-- End of setupParameterMapping function
+    } // <-- End of setupParameterMapping function (New Logic v1.4.3 style)
+
 
     /**
      * Calculates the global chi-squared value.
-     * Internal helper function for lmFitGlobal.
      * @private
      */
     function calculateChiSquaredGlobal(data, modelFunction, reconstructParamsFunc, activeParams, robustCostFunction, paramStructure, logFn) {
@@ -213,7 +298,6 @@
 
     /**
      * Calculates the global Jacobian matrix and residuals vector using numerical differentiation.
-     * Internal helper function for lmFitGlobal.
      * @private
      */
     function calculateJacobianAndResidualsGlobal(data, modelFunction, reconstructParamsFunc, activeParams, activeParamInfo, epsilon, paramStructure, logFn) {
@@ -264,17 +348,11 @@
 
     /**
      * Applies constraints (box and custom function) to the reconstructed parameter structure.
-     * Internal helper function for lmFitGlobal.
      * @private
      */
     function applyConstraintsGlobal(reconstructedParams, constraints, activeParamInfo, paramStructure, constraintFunction, logFn) {
-        let constrainedParams = reconstructedParams; // Start with input
-        let changedActive = false; // Tracks changes from box constraints
-        let boxConstraintApplied = false;
-
-        // 1. Apply Box Constraints first
+        let constrainedParams = reconstructedParams; let changedActive = false; let boxConstraintApplied = false;
         if (constraints) {
-            // Avoid deep copy unless necessary
             let paramsCopy = null;
             paramStructure.forEach((dsStruct, dsIdx) => {
                 if (!constraints[dsIdx]) return;
@@ -283,17 +361,12 @@
                     for (let vIdx = 0; vIdx < pLen; vIdx++) {
                         const constraint = constraints[dsIdx]?.[pIdx]?.[vIdx];
                         if (constraint) {
-                            // Create copy only when a constraint is actually applied
                             if (!paramsCopy) paramsCopy = JSON.parse(JSON.stringify(reconstructedParams));
-                            let value = paramsCopy[dsIdx][pIdx][vIdx];
-                            const originalValue = value;
-
+                            let value = paramsCopy[dsIdx][pIdx][vIdx]; const originalValue = value;
                             if (constraint.min !== undefined && value < constraint.min) value = constraint.min;
                             if (constraint.max !== undefined && value > constraint.max) value = constraint.max;
-
                             if (value !== originalValue) {
-                                paramsCopy[dsIdx][pIdx][vIdx] = value;
-                                boxConstraintApplied = true;
+                                paramsCopy[dsIdx][pIdx][vIdx] = value; boxConstraintApplied = true;
                                 const isActive = activeParamInfo.some(info => info.originalCoord[0][0] === dsIdx && info.originalCoord[0][1] === pIdx && info.originalCoord[1] === vIdx);
                                 if (isActive) changedActive = true;
                             }
@@ -301,47 +374,21 @@
                     }
                 });
             });
-            if (paramsCopy) constrainedParams = paramsCopy; // Use the copy if changes were made
+            if (paramsCopy) constrainedParams = paramsCopy;
         }
-
-        // 2. Apply Custom Constraint Function (if provided)
         if (typeof constraintFunction === 'function') {
             try {
-                // If box constraints were applied, pass the already modified params
-                // Otherwise, pass the original (or a copy if paranoia is high)
                 const paramsForCustomFn = boxConstraintApplied ? constrainedParams : reconstructedParams;
-                const paramsBeforeCustom = boxConstraintApplied ? null : JSON.stringify(paramsForCustomFn); // Only stringify if needed
-
-                constrainedParams = constraintFunction(paramsForCustomFn); // Apply user function
-
-                // Check if the custom function actually returned a valid structure (basic check)
-                if (!Array.isArray(constrainedParams) || constrainedParams.length !== paramStructure.length) {
-                    throw new Error("Constraint function did not return a valid parameter structure.");
-                }
-
-                // Check if the custom function modified the parameters
+                const paramsBeforeCustom = boxConstraintApplied ? null : JSON.stringify(paramsForCustomFn);
+                constrainedParams = constraintFunction(paramsForCustomFn);
+                if (!Array.isArray(constrainedParams) || constrainedParams.length !== paramStructure.length) { throw new Error("Constraint function did not return a valid parameter structure."); }
                 const paramsAfterCustom = JSON.stringify(constrainedParams);
-                if (!boxConstraintApplied && paramsAfterCustom !== paramsBeforeCustom) {
-                    changedActive = true; // Assume active might have changed if any change occurred
-                    logFn("Custom constraint function modified parameters.", 'debug');
-                } else if (boxConstraintApplied && paramsAfterCustom !== JSON.stringify(paramsForCustomFn)) {
-                     changedActive = true; // Assume active might have changed if any change occurred
-                     logFn("Custom constraint function modified parameters after box constraints.", 'debug');
-                }
-
-            } catch (e) {
-                logFn(`Error executing custom constraint function: ${e.message}`, 'error');
-                // Revert to state *before* custom constraint function was called
-                constrainedParams = boxConstraintApplied ? JSON.parse(JSON.stringify(reconstructedParams)) : reconstructedParams; // Revert if box was applied
-                // Or maybe just revert to the input reconstructedParams always? Let's revert to input.
-                // constrainedParams = reconstructedParams; // Revert to original input on error
-                // changedActive might need reset depending on desired behavior on error
-            }
+                if (!boxConstraintApplied && paramsAfterCustom !== paramsBeforeCustom) { changedActive = true; logFn("Custom constraint function modified parameters.", 'debug'); }
+                else if (boxConstraintApplied && paramsAfterCustom !== JSON.stringify(paramsForCustomFn)) { changedActive = true; logFn("Custom constraint function modified parameters after box constraints.", 'debug'); }
+            } catch (e) { logFn(`Error executing custom constraint function: ${e.message}`, 'error'); constrainedParams = boxConstraintApplied ? JSON.parse(JSON.stringify(reconstructedParams)) : reconstructedParams; }
         }
-
         return { constrainedParams, changedActive };
     }
-
 
     /**
      * Calculates the final weighted residuals for each dataset after fitting.
@@ -364,7 +411,6 @@
         });
         return errorOccurred ? null : residualsPerSeries;
     }
-
 
     /**
      * Calculates the fitted model curve over the range of the input data.
@@ -391,13 +437,14 @@
 
     /**
      * Helper function to get details needed for error reconstruction.
-     * This duplicates some logic from setupParameterMapping but avoids returning
-     * internal details from the main setup function.
+     * Uses NEW linkMap structure logic. (v1.4.3 style)
      * @private
      */
-    function setupParameterMappingDetails(initialParameters, linkMap, fixMapInput) {
+    function setupParameterMappingDetails(initialParameters, linkMapInput, fixMapInput) { // linkMapInput is NEW format here
+        // --- 1. Flatten Parameters and Create Coordinate Mapping ---
         const paramStructure = []; const paramCoordinates = []; let currentFlatIndex = 0;
         const fixMap = fixMapInput ? JSON.parse(JSON.stringify(fixMapInput)) : [];
+        const linkMap = linkMapInput ? JSON.parse(JSON.stringify(linkMapInput)) : null;
         initialParameters.forEach((dsParams, dsIdx) => {
             paramStructure.push([]); if (!fixMap[dsIdx]) fixMap[dsIdx] = [];
             dsParams.forEach((pArray, pIdx) => {
@@ -409,19 +456,73 @@
                 });
             });
         });
-        const nTotalParams = currentFlatIndex; // Use calculated length
-        const masterMap = new Array(nTotalParams).fill(-1);
-        const isFixed = new Array(nTotalParams).fill(false);
+        const nTotalParams = currentFlatIndex;
+        const masterMap = new Array(nTotalParams).fill(-1); // Ensure initialized
+        const isFixed = new Array(nTotalParams).fill(false); // Ensure initialized
+
+        // --- 2. Apply fixMap ---
         paramCoordinates.forEach((coord, flatIdx) => { const [[dsIdx, paramIdx], valIdx] = coord; if (fixMap[dsIdx]?.[paramIdx]?.[valIdx] === true) isFixed[flatIdx] = true; });
-        const linkGroups = linkMap || [];
-        linkGroups.forEach(group => {
-            let masterFlatIndex = -1;
-            for (const coord of group) { const [[dsIdx, paramIdx], valIdx] = coord; const flatIdx = paramCoordinates.findIndex(c => c[0][0] === dsIdx && c[0][1] === paramIdx && c[1] === valIdx); if (flatIdx !== -1 && !isFixed[flatIdx]) { masterFlatIndex = flatIdx; break; } }
-            if (masterFlatIndex === -1 && group.length > 0) { const firstCoord = group[0]; const firstFlatIdx = paramCoordinates.findIndex(c => c[0][0] === firstCoord[0][0] && c[0][1] === firstCoord[0][1] && c[1] === firstCoord[1]); if (firstFlatIdx !== -1) { masterFlatIndex = firstFlatIdx; group.forEach(coord => { const flatIdx = paramCoordinates.findIndex(c => c[0][0] === coord[0][0] && c[0][1] === coord[0][1] && c[1] === coord[1]); if (flatIdx !== -1 && flatIdx !== masterFlatIndex) { isFixed[flatIdx] = true; masterMap[flatIdx] = masterFlatIndex; } }); } }
-            else if (masterFlatIndex !== -1) { group.forEach(coord => { const flatIdx = paramCoordinates.findIndex(c => c[0][0] === coord[0][0] && c[0][1] === coord[0][1] && c[1] === coord[1]); if (flatIdx !== -1 && flatIdx !== masterFlatIndex) { if (isFixed[flatIdx]) isFixed[flatIdx] = false; masterMap[flatIdx] = masterFlatIndex; } }); }
-        });
-        return { isFixed, masterMap, paramCoordinates, nTotalParams, paramStructure }; // Return details needed
-    }
+
+        // --- 3. Process linkMap (NEW STRUCTURE LOGIC - v1.4.3 style) ---
+        const linkGroupsById = {};
+        if (linkMap) {
+            // Iterate through linkMap structure to find groups
+            linkMap.forEach((dsLinkMap, dsLinkIdx) => {
+                if (!dsLinkMap || dsLinkIdx >= initialParameters.length) return;
+                dsLinkMap.forEach((modelLinkMap, modelLinkIdx) => {
+                    if (!modelLinkMap || modelLinkIdx >= initialParameters[dsLinkIdx].length) return;
+                    modelLinkMap.forEach((groupId, paramLinkIdx) => {
+                        if (paramLinkIdx >= initialParameters[dsLinkIdx][modelLinkIdx].length) return;
+                        if (groupId !== null && groupId !== undefined && groupId !== '') {
+                            // Find flatIndex by matching coordinates
+                            const targetCoord = [dsLinkIdx, modelLinkIdx, paramLinkIdx];
+                            const flatIdx = paramCoordinates.findIndex(pc =>
+                                pc[0][0] === targetCoord[0] &&
+                                pc[0][1] === targetCoord[1] &&
+                                pc[1] === targetCoord[2]
+                            );
+                            if (flatIdx !== -1) {
+                                if (!linkGroupsById[groupId]) linkGroupsById[groupId] = [];
+                                linkGroupsById[groupId].push(flatIdx);
+                            }
+                        }
+                    });
+                });
+            });
+
+            // Process collected groups
+            Object.values(linkGroupsById).forEach(flatIndices => {
+                 if (flatIndices.length < 2) return;
+                let masterFlatIndex = -1;
+                let allInitiallyFixed = true;
+                for (const flatIdx of flatIndices) {
+                     if (flatIdx < 0 || flatIdx >= nTotalParams) continue;
+                    if (!isFixed[flatIdx]) {
+                        allInitiallyFixed = false;
+                        if (masterFlatIndex === -1) { masterFlatIndex = flatIdx; }
+                    }
+                 }
+                if (allInitiallyFixed) {
+                    masterFlatIndex = flatIndices[0];
+                     if (masterFlatIndex < 0 || masterFlatIndex >= nTotalParams) return;
+                    if (!isFixed[masterFlatIndex]) { isFixed[masterFlatIndex] = true; }
+                    flatIndices.forEach(flatIdx => {
+                         if (flatIdx < 0 || flatIdx >= nTotalParams) return;
+                        if (flatIdx !== masterFlatIndex) { masterMap[flatIdx] = masterFlatIndex; }
+                    });
+                } else if (masterFlatIndex !== -1) {
+                    flatIndices.forEach(flatIdx => {
+                         if (flatIdx < 0 || flatIdx >= nTotalParams) return;
+                        if (flatIdx !== masterFlatIndex) {
+                            if (isFixed[flatIdx]) isFixed[flatIdx] = false;
+                            masterMap[flatIdx] = masterFlatIndex;
+                        }
+                    });
+                }
+            });
+        }
+        return { isFixed, masterMap, paramCoordinates, nTotalParams, paramStructure };
+    } // <-- End of setupParameterMappingDetails (New Logic v1.4.3 style)
 
 
     // ============================================================================
@@ -443,9 +544,9 @@
      *   @param {number} [options.maxIterations=100]
      *   @param {number} [options.errorTolerance=1e-6]
      *   @param {number} [options.gradientTolerance=1e-6]
-     *   @param {Array<Array<[[number, number], number]>>} [options.linkMap=[]]
-     *   @param {boolean[][][]} [options.fixMap=null]
-     *   @param {object[][][]} [options.constraints=null] - Box constraints {min, max}.
+     *   @param {(number|string|null)[][][]} [options.linkMap=null] - NEW: Nested array matching initialParameters. Non-null values indicate link group ID.
+     *   @param {boolean[][][]} [options.fixMap=null] - Nested array matching initialParameters. True indicates fixed.
+     *   @param {object[][][]} [options.constraints=null] - Box constraints {min, max}, nested array matching initialParameters.
      *   @param {Function | null} [options.constraintFunction=null] - Custom function: `(params) => modifiedParams`. Applied after box constraints.
      *   @param {string} [options.logLevel='info'] - Control logging verbosity ('none', 'error', 'warn', 'info', 'debug').
      *   @param {Function} [options.onLog=()=>{}] - Callback for logs: `(message, level) => {}`.
@@ -454,50 +555,63 @@
      *   @param {number} [options.lambdaInitial=1e-3]
      *   @param {number} [options.lambdaIncreaseFactor=10]
      *   @param {number} [options.lambdaDecreaseFactor=10]
-     *   @param {number} [options.epsilon=1e-8]
+     *   @param {number} [options.epsilon=1e-8] - Step size for numerical differentiation.
      *   @param {boolean | {numPoints: number}} [options.calculateFittedModel=false] - If true or object, calculate fitted curve.
+     *   @param {number} [options.covarianceLambda=1e-9] - Regularization factor added to Hessian diagonal for covariance calculation.
      * @returns {object} - Fitting results including statistics.
-     *   (Includes p_active, p_reconstructed, finalParamErrors, chiSquared, covarianceMatrix, parameterErrors,
-     *    iterations, converged, activeParamLabels, error, totalPoints, degreesOfFreedom,
-     *    reducedChiSquared, aic, aicc, bic, residualsPerSeries, fittedModelCurves)
+     *   @property {number[]} p_active - Final values of active parameters.
+     *   @property {number[][][]} p_reconstructed - Final values of all parameters (including fixed/linked) in original nested structure.
+     *   @property {(number|null)[][][]} finalParamErrors - Estimated standard errors for all parameters (NaN if calculation failed, 0 for fixed).
+     *   @property {number} chiSquared - Final chi-squared value.
+     *   @property {number[][] | null} covarianceMatrix - Calculated covariance matrix for active parameters (potentially regularized). Null if K=0 or inversion failed.
+     *   @property {number[]} parameterErrors - Estimated standard errors for active parameters (NaN if calculation failed).
+     *   @property {number} iterations - Number of iterations performed.
+     *   @property {boolean} converged - True if the fit converged based on tolerances.
+     *   @property {string[]} activeParamLabels - Labels for the active parameters.
+     *   @property {string | null} error - Error message if fit failed catastrophically.
+     *   @property {number} totalPoints - Total number of data points used (N).
+     *   @property {number} degreesOfFreedom - Degrees of freedom (N-K).
+     *   @property {number} reducedChiSquared - Chi-squared divided by degrees of freedom.
+     *   @property {number} aic - Akaike Information Criterion.
+     *   @property {number} aicc - Corrected Akaike Information Criterion.
+     *   @property {number} bic - Bayesian Information Criterion.
+     *   @property {number[][] | null} residualsPerSeries - Weighted residuals ((y-ymodel)/ye) for each dataset.
+     *   @property {{x: number[], y: number[]}[] | null} fittedModelCurves - Calculated fitted model curves for each dataset.
      */
     function lmFitGlobal(data, modelFunction, initialParameters, options = {}) {
         // --- Options Processing ---
-        const maxIterations = options.maxIterations || 100;
-        const errorTolerance = options.errorTolerance || 1e-6;
-        const gradientTolerance = options.gradientTolerance || 1e-6;
-        const linkMap = options.linkMap || [];
-        const fixMapInput = options.fixMap || null; // Rename to avoid conflict
-        const constraints = options.constraints || null;
-        const constraintFunction = options.constraintFunction || null; // Get custom constraint fn
-        const logLevelStr = options.logLevel || 'info';
+        const maxIterations = options.maxIterations ?? 100;
+        const errorTolerance = options.errorTolerance ?? 1e-6;
+        const gradientTolerance = options.gradientTolerance ?? 1e-6;
+        const linkMapInput = options.linkMap ?? null; // NEW format
+        const fixMapInput = options.fixMap ?? null;
+        const constraints = options.constraints ?? null;
+        const constraintFunction = options.constraintFunction ?? null;
+        const logLevelStr = options.logLevel ?? 'info';
         const logLevel = LOG_LEVELS[logLevelStr.toLowerCase()] ?? LOG_LEVELS.info;
         const onLog = options.onLog && typeof options.onLog === 'function' ? options.onLog : () => {};
-        const onProgress = options.onProgress && typeof options.onProgress === 'function' ? options.onProgress : () => {}; // Progress callback
+        const onProgress = options.onProgress && typeof options.onProgress === 'function' ? options.onProgress : () => {};
         const robustCostFunction = options.robustCostFunction ?? null;
-        let lambda = options.lambdaInitial || 1e-3;
-        const lambdaIncreaseFactor = options.lambdaIncreaseFactor || 10;
-        const lambdaDecreaseFactor = options.lambdaDecreaseFactor || 10;
-        const epsilon = options.epsilon || 1e-8;
+        let lambda = options.lambdaInitial ?? 1e-3;
+        const lambdaIncreaseFactor = options.lambdaIncreaseFactor ?? 10;
+        const lambdaDecreaseFactor = options.lambdaDecreaseFactor ?? 10;
+        const epsilon = options.epsilon ?? 1e-8;
         const calculateFittedOpt = options.calculateFittedModel ?? false;
         const numPointsForCurve = (typeof calculateFittedOpt === 'object' && calculateFittedOpt.numPoints > 1)
                                   ? calculateFittedOpt.numPoints
                                   : 300;
         const shouldCalculateFitted = calculateFittedOpt === true || (typeof calculateFittedOpt === 'object');
+        // *** Regularization parameter for covariance calculation ***
+        const covarianceLambda = options.covarianceLambda ?? 1e-9;
 
         // Internal logging helpers respecting logLevel
-        const logFn = (message, level) => {
-            const messageLevel = LOG_LEVELS[level] ?? LOG_LEVELS.info;
-            if (logLevel >= messageLevel) {
-                onLog(message, level);
-            }
-        };
+        const logFn = (message, level) => { const messageLevel = LOG_LEVELS[level] ?? LOG_LEVELS.info; if (logLevel >= messageLevel) { onLog(message, level); } };
         const logInfo = (message) => logFn(message, 'info');
         const logWarn = (message) => logFn(message, 'warn');
-        const logError = (message) => logFn(message, 'error'); // Always log errors? Or respect level? Let's respect level >= error
+        const logError = (message) => logFn(message, 'error');
         const logDebug = (message) => logFn(message, 'debug');
 
-        logInfo("Starting lmFitGlobal...");
+        logInfo("Starting lmFitGlobal (Using New linkMap Logic v1.2.5)..."); // Update version marker
 
         // --- Calculate Total Data Points (N) ---
         let totalPoints = 0;
@@ -508,17 +622,21 @@
 
         // --- Parameter Mapping Setup (K = totalActiveParams) ---
         let setupResults;
-         try { setupResults = setupParameterMapping(initialParameters, linkMap, fixMapInput, logDebug); }
+         try {
+             // *** Pass linkMapInput (new format) to the updated setup function ***
+             setupResults = setupParameterMapping(initialParameters, linkMapInput, fixMapInput, logDebug);
+         }
          catch (error) { const errMsg = `Parameter setup failed: ${error.message}`; logError(errMsg); return { ...baseErrorReturn, error: errMsg }; }
 
         const { activeInitialParams, reconstructParams, activeParamInfo, totalActiveParams, paramStructure, activeParamLabels } = setupResults;
         const K = totalActiveParams;
-        // Get mapping details needed for error reconstruction
-        const { isFixed, masterMap, paramCoordinates, nTotalParams } = setupParameterMappingDetails(initialParameters, linkMap, fixMapInput);
+        // Get mapping details needed for error reconstruction (using new logic)
+        const { isFixed, masterMap, paramCoordinates, nTotalParams } = setupParameterMappingDetails(initialParameters, linkMapInput, fixMapInput);
 
         // --- Handle Case: No Active Parameters ---
         if (K === 0) {
-            logWarn("No active parameters to fit. Calculating initial stats.");
+            // ... (same as previous versions) ...
+             logWarn("No active parameters to fit. Calculating initial stats.");
             let initialChiSq = NaN; let dof = totalPoints; let redChiSq = NaN, aic = NaN, aicc = NaN, bic = NaN;
             let finalResiduals = null; let fittedCurves = null; let finalErrors = null;
             const initialReconstructed = reconstructParams([]);
@@ -526,8 +644,10 @@
                 initialChiSq = calculateChiSquaredGlobal(data, modelFunction, reconstructParams, [], robustCostFunction, paramStructure, logFn);
                 finalResiduals = calculateFinalResiduals(data, modelFunction, initialReconstructed, logFn);
                 if (shouldCalculateFitted) { fittedCurves = calculateFittedModelCurves(data, modelFunction, initialReconstructed, numPointsForCurve, logFn); }
-                finalErrors = initialReconstructed.map(ds => ds.map(pg => pg.map(() => 0))); // All fixed -> 0 error
+                finalErrors = []; let currentFlatIdx_err = 0;
+                paramStructure.forEach((dsStruct, dsIdx) => { finalErrors[dsIdx] = []; dsStruct.forEach((pLen, pIdx) => { finalErrors[dsIdx][pIdx] = []; for (let vIdx = 0; vIdx < pLen; vIdx++) { finalErrors[dsIdx][pIdx][vIdx] = 0; currentFlatIdx_err++; } }); });
                 if (isFinite(initialChiSq) && dof > 0) { redChiSq = initialChiSq / dof; aic = initialChiSq; bic = initialChiSq; if (totalPoints > 1) aicc = aic; else aicc = Infinity; }
+                 else if (isFinite(initialChiSq)) { redChiSq = Infinity; aic = initialChiSq; bic = initialChiSq; aicc = Infinity; logWarn("Degrees of freedom is zero or negative. Reduced ChiSq and AICc are Infinity."); }
             } catch(e) { logError(`Error calculating initial ChiSq/Residuals: ${e.message}`); }
             return { p_active: [], p_reconstructed: initialReconstructed, finalParamErrors: finalErrors, chiSquared: initialChiSq, covarianceMatrix: [], parameterErrors: [], iterations: 0, converged: true, activeParamLabels: [], totalPoints: totalPoints, degreesOfFreedom: dof, reducedChiSquared: redChiSq, aic: aic, aicc: aicc, bic: bic, error: null, residualsPerSeries: finalResiduals, fittedModelCurves: fittedCurves };
         }
@@ -545,13 +665,14 @@
         if (!isFinite(chiSquared)) { const errMsg = "Initial Chi-Squared is not finite."; logError(errMsg); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, error: errMsg }; }
 
         // --- LM Iteration Loop ---
+        // ... (Iteration loop is identical to previous versions) ...
         let iteration;
         for (iteration = 0; iteration < maxIterations; iteration++) {
             iterationsPerformed = iteration + 1; logInfo(`--- Iteration ${iterationsPerformed} (Lambda: ${lambda.toExponential(3)}) ---`); logDebug(`Iter ${iterationsPerformed} - Current Active Params: ${activeParameters.map(p=>p.toExponential(5)).join(', ')}`);
             let jacobian, residuals; try { ({ jacobian, residuals } = calculateJacobianAndResidualsGlobal(data, modelFunction, reconstructParams, activeParameters, activeParamInfo, epsilon, paramStructure, logFn)); } catch (error) { const errMsg = `Jacobian failed: ${error.message}`; logError(`Error Jacobian/Resid iter ${iterationsPerformed}: ${errMsg}`); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, iterations: iterationsPerformed, error: errMsg }; }
-            let gradient, currentHessian; try { gradient = calculateGradient(jacobian, residuals); currentHessian = calculateHessian(jacobian); /* Store hessian used for this step */ } catch (error) { const errMsg = `Grad/Hess failed: ${error.message}`; logError(`Error Grad/Hess iter ${iterationsPerformed}: ${errMsg}`); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, iterations: iterationsPerformed, error: errMsg }; }
+            let gradient, currentHessian; try { gradient = calculateGradient(jacobian, residuals); currentHessian = calculateHessian(jacobian); } catch (error) { const errMsg = `Grad/Hess failed: ${error.message}`; logError(`Error Grad/Hess iter ${iterationsPerformed}: ${errMsg}`); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, iterations: iterationsPerformed, error: errMsg }; }
             if (gradient.some(g => !isFinite(g)) || currentHessian.some(row => row.some(h => !isFinite(h)))) { const errMsg = "Non-finite grad/hess."; logError(`Non-finite grad/hess iter ${iterationsPerformed}.`); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, iterations: iterationsPerformed, error: errMsg }; }
-            const maxGradient = Math.max(...gradient.map(Math.abs)); if (maxGradient < gradientTolerance) { logInfo(`Converged (grad tol ${gradientTolerance}). Max Grad: ${maxGradient.toExponential(3)}`); converged = true; break; } // Convergence Check 1
+            const maxGradient = Math.max(...gradient.map(Math.abs)); if (maxGradient < gradientTolerance) { logInfo(`Converged (grad tol ${gradientTolerance}). Max Grad: ${maxGradient.toExponential(3)}`); converged = true; break; }
             logInfo(`Gradient: ${gradient.map(g => g.toExponential(3)).join(', ')}`);
             let parameterUpdates; let solveSuccess = false; let attempt = 0; const maxSolveAttempts = 5; let currentLambda = lambda;
             while (!solveSuccess && attempt < maxSolveAttempts) {
@@ -561,56 +682,108 @@
             }
             if (!solveSuccess) continue; lambda = currentLambda; logInfo(`Parameter Updates: ${parameterUpdates.map(pu => pu.toExponential(3)).join(', ')}`);
             const proposedActiveParams = activeParameters.map((p, i) => p + parameterUpdates[i]);
-            let proposedReconstructed = reconstructParams(proposedActiveParams); // Initial proposal
-
-            // Apply constraints (box and custom function)
-            const { constrainedParams, changedActive } = applyConstraintsGlobal(
-                proposedReconstructed, constraints, activeParamInfo, paramStructure, constraintFunction, logFn // Pass constraintFunction & logFn
-            );
-            proposedReconstructed = constrainedParams; // Use the potentially constrained parameters
-
+            let proposedReconstructed = reconstructParams(proposedActiveParams);
+            const { constrainedParams, changedActive } = applyConstraintsGlobal( proposedReconstructed, constraints, activeParamInfo, paramStructure, constraintFunction, logFn );
+            proposedReconstructed = constrainedParams;
             let finalProposedActiveParams = [...proposedActiveParams];
-            if (changedActive) { const tempActive = []; activeParamInfo.forEach(info => { const [[ds, p], v] = info.originalCoord; tempActive.push(proposedReconstructed[ds][p][v]); }); finalProposedActiveParams = tempActive; logInfo("Constraints modified parameters."); }
-
+            if (changedActive) { const tempActive = []; activeParamInfo.forEach(info => { const [[ds, p], v] = info.originalCoord; tempActive.push(proposedReconstructed[ds][p][v]); }); finalProposedActiveParams = tempActive; logInfo("Constraints modified parameters, re-extracted active values."); }
             let newChiSquared = NaN; try { newChiSquared = calculateChiSquaredGlobal(data, modelFunction, reconstructParams, finalProposedActiveParams, robustCostFunction, paramStructure, logFn); } catch (error) { logError(`Error ChiSq proposed step iter ${iterationsPerformed}: ${error.message}`); newChiSquared = Infinity; }
             logInfo(`New Chi-Squared: ${newChiSquared}`);
-
             if (isFinite(newChiSquared) && newChiSquared < chiSquared) {
                 const chiSquaredChange = chiSquared - newChiSquared; activeParameters = finalProposedActiveParams; chiSquared = newChiSquared; lambda = Math.max(lambda / lambdaDecreaseFactor, 1e-12);
                 logInfo(`Accepted. ChiSq decreased by ${chiSquaredChange.toExponential(3)}. Lambda decreased to: ${lambda.toExponential(3)}`);
-                // --- Post Progress Update ---
-                try {
-                    onProgress({ iteration: iterationsPerformed, chiSquared: chiSquared, lambda: lambda, activeParameters: [...activeParameters] });
-                } catch (e) { logWarn(`Error in onProgress callback: ${e.message}`); }
-                // --------------------------
-                if (chiSquaredChange < errorTolerance) { logInfo(`Converged (chiSq tol ${errorTolerance}).`); converged = true; break; } // Convergence Check 2
+                try { onProgress({ iteration: iterationsPerformed, chiSquared: chiSquared, lambda: lambda, activeParameters: [...activeParameters] }); } catch (e) { logWarn(`Error in onProgress callback: ${e.message}`); }
+                if (chiSquaredChange < errorTolerance) { logInfo(`Converged (chiSq tol ${errorTolerance}).`); converged = true; break; }
             } else { lambda = Math.min(lambda * lambdaIncreaseFactor, 1e10); logInfo(`Rejected (ChiSq ${isNaN(newChiSquared) ? 'NaN' : 'increased/stagnant'}). Lambda increased to: ${lambda.toExponential(3)}`); if (lambda >= 1e10) logWarn("Lambda reached maximum limit."); }
-        } // End of LM iteration loop
+        }
 
         // --- Post-Loop Processing & Statistics ---
         if (!converged && iteration === maxIterations) { logWarn(`lmFitGlobal did not converge within ${maxIterations} iterations.`); }
-
         logInfo("Recalculating final Jacobian/Hessian for covariance...");
         try { const { jacobian: finalJacobian } = calculateJacobianAndResidualsGlobal(data, modelFunction, reconstructParams, activeParameters, activeParamInfo, epsilon, paramStructure, logFn); finalHessian = calculateHessian(finalJacobian); }
         catch (error) { logError(`Failed to recalculate final Hessian: ${error.message}`); finalHessian = null; }
 
+        // --- Calculate Statistics & Parameter Errors ---
         let degreesOfFreedom = NaN, reducedChiSquared = NaN, aic = NaN, aicc = NaN, bic = NaN;
-        if (isFinite(chiSquared) && totalPoints > 0) { degreesOfFreedom = totalPoints - K; if (degreesOfFreedom > 0) { reducedChiSquared = chiSquared / degreesOfFreedom; aic = chiSquared + 2 * K; const aiccCorrectionDenom = totalPoints - K - 1; if (aiccCorrectionDenom > 0) aicc = aic + (2 * K * (K + 1)) / aiccCorrectionDenom; else { aicc = Infinity; logWarn("AICc denominator (N-K-1) is zero or negative."); } bic = chiSquared + K * Math.log(totalPoints); } else { logWarn("Degrees of freedom is zero or negative."); aic = chiSquared + 2 * K; bic = chiSquared + K * Math.log(totalPoints); aicc = Infinity; } }
-        else { logWarn("Final Chi-Squared is not finite. Cannot calculate statistics."); }
+        if (isFinite(chiSquared) && totalPoints > 0) {
+            degreesOfFreedom = totalPoints - K;
+            if (degreesOfFreedom > 0) {
+                reducedChiSquared = chiSquared / degreesOfFreedom; aic = chiSquared + 2 * K; const aiccCorrectionDenom = totalPoints - K - 1;
+                if (aiccCorrectionDenom > 0) { aicc = aic + (2 * K * (K + 1)) / aiccCorrectionDenom; } else { aicc = Infinity; logWarn("AICc denominator (N-K-1) is zero or negative. AICc set to Infinity."); }
+                bic = chiSquared + K * Math.log(totalPoints);
+            } else { reducedChiSquared = Infinity; aic = chiSquared + 2 * K; bic = chiSquared + K * Math.log(totalPoints); aicc = Infinity; logWarn(`Degrees of freedom (${degreesOfFreedom}) is zero or negative. Reduced Chi-Squared is Infinity/undefined. Parameter errors may be unreliable or NaN.`); }
+        } else { logWarn("Final Chi-Squared is not finite. Cannot calculate statistics reliably."); degreesOfFreedom = totalPoints - K; reducedChiSquared = NaN; aic = NaN; aicc = NaN; bic = NaN; }
 
+        // Initialize error outputs
         parameterErrors = new Array(K).fill(NaN);
-        if (finalHessian && K > 0) { try { covarianceMatrix = invertMatrixUsingSVD(finalHessian); parameterErrors = covarianceMatrix.map((row, i) => { const variance = row[i]; const scaledVariance = variance * (reducedChiSquared || 1.0); return isFinite(scaledVariance) ? Math.sqrt(Math.abs(scaledVariance)) : NaN; }); if (parameterErrors.some(isNaN)) { logWarn("NaN encountered in parameter errors."); } } catch (error) { logError(`Failed to calculate covariance matrix/parameter errors: ${error.message}`); covarianceMatrix = new Array(K).fill(0).map(() => new Array(K).fill(NaN)); parameterErrors = new Array(K).fill(NaN); } }
-        else { if (K > 0) logWarn("Could not calculate covariance matrix (no valid final Hessian?)."); covarianceMatrix = new Array(K).fill(0).map(() => new Array(K).fill(NaN)); }
+        covarianceMatrix = null; // Initialize as null
+
+        // Attempt to calculate covariance and errors only if Hessian is available and K > 0
+        if (finalHessian && K > 0) {
+            try {
+                // *** Apply Regularization before inversion ***
+                const regularizedHessian = finalHessian.map((row, i) =>
+                    row.map((value, j) => (i === j ? value + covarianceLambda : value))
+                );
+                logDebug(`Applying regularization (lambda=${covarianceLambda}) for covariance matrix inversion.`);
+                covarianceMatrix = invertMatrixUsingSVD(regularizedHessian); // Invert the regularized matrix
+
+                const scaleFactor = (reducedChiSquared && isFinite(reducedChiSquared) && reducedChiSquared > 0) ? reducedChiSquared : 1.0;
+                if (scaleFactor === 1.0 && degreesOfFreedom > 0 && isFinite(chiSquared)) { logWarn("Reduced Chi-Squared is invalid or not positive. Using scale factor 1.0 for parameter errors, which might underestimate errors if fit is poor."); }
+                else if (scaleFactor === 1.0 && degreesOfFreedom <= 0) { logInfo("Using scale factor 1.0 for parameter errors due to non-positive degrees of freedom."); }
+
+                // Calculate parameter errors from diagonal of covariance matrix
+                parameterErrors = covarianceMatrix.map((row, i) => {
+                    if (i >= row.length) { logError(`Error accessing covariance matrix diagonal at index ${i}. Matrix might be malformed.`); return NaN; }
+                    const variance = row[i];
+                    const scaledVariance = variance * scaleFactor;
+
+                    // *** Use Math.abs() for standard error calculation ***
+                    let error = NaN;
+                    if (isFinite(scaledVariance)) {
+                        if (scaledVariance < 0) {
+                            logWarn(`Negative variance (${scaledVariance.toExponential(3)}) encountered for active param ${i}. Returning sqrt(abs(variance)). Error estimate might be unreliable.`);
+                            error = Math.sqrt(Math.abs(scaledVariance));
+                        } else {
+                            error = Math.sqrt(scaledVariance);
+                        }
+                    }
+                    // Log if still NaN for other reasons (e.g., variance was NaN/Infinity)
+                    if (isNaN(error) && isFinite(scaledVariance)) {
+                         logDebug(`NaN error calc for param ${i}: variance=${variance}, scaleFactor=${scaleFactor}, scaledVariance=${scaledVariance}`);
+                    }
+                    return error;
+                });
+
+                // Update general warning
+                if (parameterErrors.some(isNaN)) {
+                    logWarn("NaN encountered in parameter errors (potentially due to non-finite variance/covariance). Check fit quality, model, initial parameters, and data.");
+                }
+
+            } catch (error) {
+                logError(`Failed to calculate covariance matrix/parameter errors: ${error.message}`);
+                parameterErrors = new Array(K).fill(NaN);
+                covarianceMatrix = new Array(K).fill(0).map(() => new Array(K).fill(NaN)); // Set to NaN matrix on error
+            }
+        } else {
+            if (K > 0 && !finalHessian) { logWarn("Could not calculate covariance matrix (no valid final Hessian?). Parameter errors will be NaN."); }
+            else if (K === 0) { logInfo("No active parameters (K=0). Parameter errors are not applicable."); }
+            covarianceMatrix = new Array(K).fill(0).map(() => new Array(K).fill(NaN)); // Ensure it's NaN matrix if not calculated
+        }
 
         const finalReconstructedParams = reconstructParams(activeParameters);
-
-        let finalParamErrors = null; try { finalParamErrors = []; let currentFlatIdx = 0; paramStructure.forEach((dsStruct, dsIdx) => { finalParamErrors[dsIdx] = []; dsStruct.forEach((pLen, pIdx) => { finalParamErrors[dsIdx][pIdx] = []; for (let vIdx = 0; vIdx < pLen; vIdx++) { let errorValue = NaN; if (isFixed[currentFlatIdx]) { errorValue = 0; } else if (masterMap[currentFlatIdx] !== -1) { const masterFlatIdx = masterMap[currentFlatIdx]; const masterInfo = activeParamInfo.find(info => info.flatIndex === masterFlatIdx); if (masterInfo) { errorValue = parameterErrors[masterInfo.activeIndex]; } else { errorValue = 0; } } else { const activeInfo = activeParamInfo.find(info => info.flatIndex === currentFlatIdx); if (activeInfo) { errorValue = parameterErrors[activeInfo.activeIndex]; } else { logWarn(`Could not find active info for supposedly active parameter at flat index ${currentFlatIdx}`); } } finalParamErrors[dsIdx][pIdx][vIdx] = errorValue; currentFlatIdx++; } }); }); } catch (e) { logError(`Error constructing finalParamErrors structure: ${e.message}`); finalParamErrors = null; }
+        let finalParamErrors = null;
+        try {
+            finalParamErrors = []; let currentFlatIdx_err = 0;
+            paramStructure.forEach((dsStruct, dsIdx) => { finalParamErrors[dsIdx] = []; dsStruct.forEach((pLen, pIdx) => { finalParamErrors[dsIdx][pIdx] = []; for (let vIdx = 0; vIdx < pLen; vIdx++) { let errorValue = NaN; if (isFixed[currentFlatIdx_err]) { errorValue = 0; } else if (masterMap[currentFlatIdx_err] !== -1) { const masterFlatIdx = masterMap[currentFlatIdx_err]; const masterInfo = activeParamInfo.find(info => info.flatIndex === masterFlatIdx); if (masterInfo) { if(parameterErrors && masterInfo.activeIndex < parameterErrors.length) { errorValue = parameterErrors[masterInfo.activeIndex]; } else { logWarn(`Invalid index ${masterInfo.activeIndex} for parameterErrors array (length ${parameterErrors?.length}) while processing slave ${currentFlatIdx_err}. Setting error to NaN.`); errorValue = NaN; } } else { logWarn(`Could not find active info for master parameter (flat index ${masterFlatIdx}) of slave (flat index ${currentFlatIdx_err}). Setting error to 0.`); errorValue = 0; } } else { const activeInfo = activeParamInfo.find(info => info.flatIndex === currentFlatIdx_err); if (activeInfo) { if(parameterErrors && activeInfo.activeIndex < parameterErrors.length) { errorValue = parameterErrors[activeInfo.activeIndex]; } else { logWarn(`Invalid index ${activeInfo.activeIndex} for parameterErrors array (length ${parameterErrors?.length}) while processing active param ${currentFlatIdx_err}. Setting error to NaN.`); errorValue = NaN; } } else { logWarn(`Could not find active info for supposedly active parameter at flat index ${currentFlatIdx_err}. Setting error to NaN.`); } } finalParamErrors[dsIdx][pIdx][vIdx] = errorValue; currentFlatIdx_err++; } }); });
+        } catch (e) { logError(`Error constructing finalParamErrors structure: ${e.message}`); finalParamErrors = null; }
 
         let finalResiduals = null; try { finalResiduals = calculateFinalResiduals(data, modelFunction, finalReconstructedParams, logFn); } catch (error) { logError(`Failed to calculate final residuals: ${error.message}`); }
         let fittedCurves = null; if (shouldCalculateFitted) { logInfo(`Calculating fitted model curves with ${numPointsForCurve} points...`); try { fittedCurves = calculateFittedModelCurves(data, modelFunction, finalReconstructedParams, numPointsForCurve, logFn); } catch (error) { logError(`Failed to calculate fitted model curves: ${error.message}`); } }
 
         logInfo("--------------------"); logInfo("lmFitGlobal Finished."); logInfo(`Iterations Performed: ${iterationsPerformed}`); logInfo(`Total Points (N): ${totalPoints}`); logInfo(`Active Parameters (K): ${K}`); logInfo(`Degrees of Freedom (N-K): ${degreesOfFreedom}`); logInfo(`Final Active Parameters: ${activeParameters.map(p=>p.toExponential(5)).join(', ')}`); logInfo(`Final Chi-Squared: ${chiSquared}`); logInfo(`Reduced Chi-Squared: ${reducedChiSquared}`); logInfo(`AIC: ${aic}`); logInfo(`AICc: ${aicc}`); logInfo(`BIC: ${bic}`); logInfo(`Parameter Errors (Active): ${parameterErrors.map(p=>isNaN(p)?'NaN':p.toExponential(3)).join(', ')}`); logInfo(`Converged: ${converged}`); logInfo("--------------------");
 
+        // *** Return covarianceMatrix ***
         return {
             p_active: activeParameters, p_reconstructed: finalReconstructedParams, finalParamErrors,
             chiSquared, covarianceMatrix, parameterErrors, iterations: iterationsPerformed, converged,
@@ -623,198 +796,82 @@
     // ============================================================================
     // Helper Functions for Wrappers
     // ============================================================================
-
-     /**
-     * Checks if the input likely represents a single dataset.
-     * Simple check based on data.x being a 1D array.
-     * @param {object} data - The data object.
-     * @returns {boolean} True if likely single dataset format.
-     * @private
-     */
-     function isSingleDataset(data) {
-         return data && Array.isArray(data.x) && (data.x.length === 0 || !Array.isArray(data.x[0]));
-     }
-
-    /**
-     * Wraps a single dataset's inputs into the nested format required by lmFitGlobal.
-     * @param {object} data - Single dataset {x: number[], y: number[], ye: number[]}.
-     * @param {Function[]} modelFunction - Array of model functions for the dataset.
-     * @param {number[][]} initialParameters - Array of parameter arrays, e.g., [[p1], [p2a, p2b]].
-     * @param {object} options - Original options object.
-     * @returns {object} Wrapped inputs { data, modelFunction, initialParameters, options }
-     * @private
-     */
-    function wrapSingleDatasetInput(data, modelFunction, initialParameters, options) {
-        const wrappedData = {
-            x: [data.x],
-            y: [data.y],
-            ye: [data.ye]
-        };
-        // Ensure modelFunction is an array of functions, even if only one model
+     function isSingleDataset(data) { return data && Array.isArray(data.x) && (data.x.length === 0 || !Array.isArray(data.x[0])); }
+     function wrapSingleDatasetInput(data, modelFunction, initialParameters, options) {
+        const wrappedData = { x: [data.x], y: [data.y], ye: [data.ye] };
         const wrappedModelFunction = [ Array.isArray(modelFunction) ? modelFunction : [modelFunction] ];
-        // Ensure initialParameters matches the structure [[ [...], [...], ... ]]
         const wrappedInitialParameters = [ initialParameters ];
-
-        // Wrap fixMap and constraints if they exist and are not already wrapped
-        const wrappedOptions = { ...options }; // Shallow copy options
-        if (options.fixMap && !Array.isArray(options.fixMap[0])) {
-            wrappedOptions.fixMap = [options.fixMap];
+        const wrappedOptions = { ...options };
+        if (options.fixMap && (!Array.isArray(options.fixMap[0]) || !Array.isArray(options.fixMap[0][0]))) { wrappedOptions.fixMap = [options.fixMap]; }
+        if (options.constraints && (!Array.isArray(options.constraints[0]) || !Array.isArray(options.constraints[0][0]))) { wrappedOptions.constraints = [options.constraints]; }
+        // *** Wrap linkMap (NEW format) ***
+        if (options.linkMap && (!Array.isArray(options.linkMap[0]) || !Array.isArray(options.linkMap[0][0]) || !Array.isArray(options.linkMap[0][0][0]))) {
+             wrappedOptions.linkMap = [options.linkMap];
         }
-        if (options.constraints && !Array.isArray(options.constraints[0])) {
-            wrappedOptions.constraints = [options.constraints];
-        }
-        // linkMap doesn't make sense for a single dataset, remove it
-        delete wrappedOptions.linkMap;
-
-        return {
-            data: wrappedData,
-            modelFunction: wrappedModelFunction,
-            initialParameters: wrappedInitialParameters,
-            options: wrappedOptions
-        };
+        return { data: wrappedData, modelFunction: wrappedModelFunction, initialParameters: wrappedInitialParameters, options: wrappedOptions };
     }
 
     // ============================================================================
     // User-Facing Wrapper Functions
     // ============================================================================
-
     /**
      * Fits a single dataset using the Levenberg-Marquardt algorithm.
-     * This is a convenience wrapper around lmFitGlobal for simpler use cases.
-     *
-     * @param {object} data - Contains the experimental data for ONE dataset {x: number[], y: number[], ye: number[]}.
-     * @param {Function | Function[]} modelFunction - A single model function or an array of model functions for this dataset.
-     * @param {number[] | number[][]} initialParameters - Initial parameter guesses. If multiple models, use nested array: [[p1a, p1b], [p2a]]. If single model, can be flat array: [p1a, p1b].
-     * @param {object} [options={}] - Optional configuration (see lmFitGlobal docs, but linkMap is ignored).
-     *                                 fixMap and constraints should be provided in the single-dataset format (e.g., `fixMap = [[false, true], [false]]`).
-     * @returns {object} The fitting result object (see lmFitGlobal docs). Structure is the same, but arrays like residualsPerSeries will only have one element.
+     * @param {object} data - {x: number[], y: number[], ye: number[]}.
+     * @param {Function | Function[]} modelFunction - A single model function or an array of model functions.
+     * @param {number[] | number[][]} initialParameters - Initial guesses. Nested if multiple models.
+     * @param {object} [options={}] - Optional configuration (see lmFitGlobal docs).
+     *                                 `fixMap`, `constraints` in single-dataset format.
+     *                                 `linkMap` in new single-dataset format (e.g., `linkMap = [[null, 'id1'], ['id1', null]]`).
+     * @returns {object} The fitting result object.
      */
     function lmFit(data, modelFunction, initialParameters, options = {}) {
-         // Input validation
-         if (!isSingleDataset(data)) {
-             throw new Error("lmFit requires single dataset input format (e.g., data.x as a 1D array). Use lmFitGlobal or lmFitIndependent for multiple datasets.");
-         }
-         // Normalize modelFunction to array
+         if (!isSingleDataset(data)) { throw new Error("lmFit requires single dataset input format."); }
          const modelFuncArray = Array.isArray(modelFunction) ? modelFunction : [modelFunction];
-         // Normalize initialParameters to nested array structure
-         const initialParamsNested = modelFuncArray.length === 1 && !Array.isArray(initialParameters[0])
-             ? [initialParameters] // Single model, flat params -> [[p1, p2, ...]]
-             : initialParameters; // Assumed already nested [[p1a, p1b], [p2a]]
-
-         // Wrap inputs for lmFitGlobal
-         const {
-             data: wrappedData,
-             modelFunction: wrappedModelFunc,
-             initialParameters: wrappedInitialParams,
-             options: wrappedOptions
-         } = wrapSingleDatasetInput(data, modelFuncArray, initialParamsNested, options);
-
-         // Call the global fitter
+         const initialParamsNested = modelFuncArray.length === 1 && initialParameters.length > 0 && !Array.isArray(initialParameters[0]) ? [initialParameters] : initialParameters;
+         const { data: wrappedData, modelFunction: wrappedModelFunc, initialParameters: wrappedInitialParams, options: wrappedOptions } = wrapSingleDatasetInput(data, modelFuncArray, initialParamsNested, options);
          const result = lmFitGlobal(wrappedData, wrappedModelFunc, wrappedInitialParams, wrappedOptions);
-
-         // Return the result (structure is already suitable)
          return result;
     }
 
-
     /**
      * Fits multiple datasets independently (sequentially) using lmFitGlobal.
-     * Useful when parameters are not shared or linked across datasets.
-     *
-     * @param {object} data - Contains the experimental data for MULTIPLE datasets {x: number[][], y: number[][], ye: number[][]}.
-     * @param {Function[][]} modelFunction - Array of arrays of model functions, matching data structure.
-     * @param {number[][][]} initialParameters - Nested array of initial parameter guesses, matching data structure.
-     * @param {object} [options={}] - Optional configuration. Includes most lmFitGlobal options.
-     *                                 `linkMap` is ignored. `fixMap` and `constraints` apply per-dataset.
-     *                                 `onLog` and `onProgress` receive an additional `datasetIndex` argument.
-     * @returns {object[]} An array of fitting result objects (one per dataset, in the original order).
-     *                     Individual fit errors are in the 'error' property of each result object.
+     * @param {object} data - {x: number[][], y: number[][], ye: number[][]}.
+     * @param {Function[][]} modelFunction - Array of arrays of model functions.
+     * @param {number[][][]} initialParameters - Nested array of initial parameter guesses.
+     * @param {object} [options={}] - Optional configuration. `linkMap` is ignored.
+     * @returns {object[]} An array of fitting result objects.
      */
     function lmFitIndependent(data, modelFunction, initialParameters, options = {}) {
-        // Handle potential single dataset input gracefully
         if (isSingleDataset(data)) {
             console.warn("lmFitIndependent received single dataset input. Calling lmFit instead.");
             try {
-                // Need to adjust modelFunction and initialParameters format for lmFit call
                  const modelFuncArray = Array.isArray(modelFunction) ? modelFunction : [modelFunction];
-                 const initialParamsInput = (modelFuncArray.length === 1 && !Array.isArray(initialParameters[0]))
-                     ? initialParameters // Assume flat array for single model
-                     : initialParameters[0]; // Use the first element if nested structure was passed
-                 const modelFuncInput = modelFuncArray.length === 1 ? modelFuncArray[0] : modelFuncArray[0]; // Use first element
-
+                 const initialParamsInput = (modelFuncArray.length === 1 && initialParameters.length > 0 && !Array.isArray(initialParameters[0])) ? initialParameters : (initialParameters[0] ?? []);
+                 const modelFuncInput = modelFuncArray.length === 1 ? modelFuncArray[0] : (modelFuncArray[0] ?? []);
                 const result = lmFit(data, modelFuncInput, initialParamsInput, options);
-                return [result]; // Return result wrapped in an array
-            } catch (e) {
-                 // Return error state consistent with multi-dataset failure
-                 return [{ error: `Error processing single dataset input for lmFitIndependent: ${e.message}`, converged: false }];
-            }
+                return [result];
+            } catch (e) { return [{ error: `Error processing single dataset input for lmFitIndependent: ${e.message}`, converged: false }]; }
         }
-
-        const numDatasets = data.x.length;
-        if (numDatasets === 0) return []; // No work to do
-
-        const allResults = [];
-        const rootOnLog = options.onLog || (() => {});
-        const rootOnProgress = options.onProgress || (() => {});
-
-        // --- Sequential Loop ---
+        const numDatasets = data.x?.length ?? 0; if (numDatasets === 0) return [];
+        if (modelFunction?.length !== numDatasets || initialParameters?.length !== numDatasets || data.y?.length !== numDatasets || data.ye?.length !== numDatasets) { throw new Error("Input array lengths must match for lmFitIndependent."); }
+        const allResults = []; const rootOnLog = options.onLog || (() => {}); const rootOnProgress = options.onProgress || (() => {}); const rootLogLevel = LOG_LEVELS[options.logLevel?.toLowerCase() ?? 'info'] ?? LOG_LEVELS.info;
         for (let i = 0; i < numDatasets; i++) {
-            const datasetIndex = i; // Capture index for callbacks
-            console.log(`--- Starting Independent Fit for Dataset ${datasetIndex} ---`); // Console log for clarity
-
-            // Prepare single dataset inputs
-            const singleData = { x: data.x[i], y: data.y[i], ye: data.ye[i] };
-            const singleModelFunc = modelFunction[i];
-            const singleInitialParams = initialParameters[i];
-
-            // Prepare options for this specific task
+            const datasetIndex = i;
+            const logFnLoop = (message, level) => { const messageLevel = LOG_LEVELS[level] ?? LOG_LEVELS.info; if (rootLogLevel >= messageLevel) { rootOnLog(message, level, datasetIndex); } };
+            logFnLoop(`--- Starting Independent Fit for Dataset ${datasetIndex} ---`, 'info');
+            const singleData = { x: data.x[i], y: data.y[i], ye: data.ye[i] }; const singleModelFunc = modelFunction[i]; const singleInitialParams = initialParameters[i];
             const singleOptions = { ...options };
-            if (options.fixMap) singleOptions.fixMap = options.fixMap[i];
-            if (options.constraints) singleOptions.constraints = options.constraints[i];
-            delete singleOptions.linkMap; // Ignored
-            delete singleOptions.onLog; // Use wrapper
-            delete singleOptions.onProgress; // Use wrapper
-
-            // Wrap callbacks to include dataset index
-            singleOptions.onLog = (message, level) => {
-                rootOnLog(message, level, datasetIndex);
-            };
-            singleOptions.onProgress = (progressData) => {
-                rootOnProgress(progressData, datasetIndex);
-            };
-
-            // Wrap inputs for lmFitGlobal call
-            const {
-                data: wrappedData,
-                modelFunction: wrappedModelFunc,
-                initialParameters: wrappedInitialParams,
-                options: wrappedOptions // Use the options prepared for this single dataset
-            } = wrapSingleDatasetInput(singleData, singleModelFunc, singleInitialParams, singleOptions);
-
-            try {
-                // Call lmFitGlobal for the single wrapped dataset
-                const result = lmFitGlobal(wrappedData, wrappedModelFunc, wrappedInitialParams, wrappedOptions);
-                allResults.push(result);
-            } catch (error) {
-                console.error(`Error fitting dataset ${datasetIndex}:`, error);
-                rootOnLog(`Fit failed for dataset ${datasetIndex}: ${error.message}`, 'error', datasetIndex);
-                // Push an error object into the results array
-                allResults.push({
-                    error: `Fit failed: ${error.message}`,
-                    converged: false,
-                    // Include other default fields to maintain structure
-                    p_active: [], p_reconstructed: singleInitialParams, finalParamErrors: null, chiSquared: NaN,
-                    covarianceMatrix: null, parameterErrors: [], iterations: 0, activeParamLabels: [],
-                    totalPoints: singleData.x?.length ?? 0, degreesOfFreedom: NaN, reducedChiSquared: NaN,
-                    aic: NaN, aicc: NaN, bic: NaN, residualsPerSeries: null, fittedModelCurves: null
-                });
-            }
-            console.log(`--- Finished Independent Fit for Dataset ${datasetIndex} ---`);
-        } // End sequential loop
-
+            if (options.fixMap && Array.isArray(options.fixMap[i])) { singleOptions.fixMap = options.fixMap[i]; } else { delete singleOptions.fixMap; }
+            if (options.constraints && Array.isArray(options.constraints[i])) { singleOptions.constraints = options.constraints[i]; } else { delete singleOptions.constraints; }
+            delete singleOptions.linkMap; delete singleOptions.onLog; delete singleOptions.onProgress;
+            singleOptions.onLog = (message, level) => { rootOnLog(message, level, datasetIndex); }; singleOptions.onProgress = (progressData) => { rootOnProgress(progressData, datasetIndex); };
+            const { data: wrappedData, modelFunction: wrappedModelFunc, initialParameters: wrappedInitialParams, options: wrappedOptions } = wrapSingleDatasetInput(singleData, singleModelFunc, singleInitialParams, singleOptions);
+            try { const result = lmFitGlobal(wrappedData, wrappedModelFunc, wrappedInitialParams, wrappedOptions); allResults.push(result); }
+            catch (error) { logFnLoop(`Error fitting dataset ${datasetIndex}: ${error.message}`, 'error'); allResults.push({ error: `Fit failed: ${error.message}`, converged: false, p_active: [], p_reconstructed: singleInitialParams, finalParamErrors: null, chiSquared: NaN, covarianceMatrix: null, parameterErrors: [], iterations: 0, activeParamLabels: [], totalPoints: singleData.x?.length ?? 0, degreesOfFreedom: NaN, reducedChiSquared: NaN, aic: NaN, aicc: NaN, bic: NaN, residualsPerSeries: null, fittedModelCurves: null }); }
+            logFnLoop(`--- Finished Independent Fit for Dataset ${datasetIndex} ---`, 'info');
+        }
         return allResults;
     }
-
 
     // Expose public functions
     global.lmFitGlobal = lmFitGlobal;
