@@ -169,6 +169,7 @@ function linearModel(params, x) {
 }
 
 // --- 2. Prepare Data ---
+// inputs are 2-d lists where each row corresponds to a data series
 const data = {
   x: [
     [1, 2, 3, 4, 5, 6], // Dataset 0
@@ -185,6 +186,7 @@ const data = {
 };
 
 // --- 3. Define Model Structure ---
+// Multiple models can be evaluated in combination for each dataset, allowing users to build a Gaussian function + Linear term, as demonstrated here
 // Dataset 0: Gaussian only
 // Dataset 1: Linear only
 const modelFunction = [
@@ -204,12 +206,14 @@ const initialParameters = [
 // --- 5. Define Options (Fixing, Linking, Logging) ---
 
 // Example: Fix the Gaussian center (Dataset 0, Model Group 0, Param Index 1)
+// Structure matches initialParameters
 const fixMap = [
   [ [false, true, false] ], // Fix center for Gaussian in DS 0
   [ [false, false] ] // Both linear params free in DS 1
 ];
 
-// Example: Link Gaussian width (DS 0, MG 0, PI 2) to Linear intercept (DS 1, MG 0, PI 1)
+// Example: Link Gaussian width (DataSet 0, ModelGroup 0, ParameterIndex 2) to Linear intercept (DS 1, MG 0, PI 1)
+// each parameter link group references to coordinate of the parameter group in initialParameters, and the index of the parameter within that group
 // (This might not make physical sense, just demonstrates linking)
 const linkMap = [
   // Group 1
