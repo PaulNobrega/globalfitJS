@@ -6,7 +6,7 @@
  * Includes helpers for parameter mapping, chi-squared calculation, Jacobian calculation,
  * constraint application, statistics calculation, and optional confidence interval bands for fitted curves.
  * Depends on svd.js for linear algebra operations.
- * Version: 1.2.6 (Adds optional bootstrapping fallback for CI bands)
+ * Version: 1.2.7 (Adds optional bootstrapping fallback for CI bands)
  */
 
 (function(global) {

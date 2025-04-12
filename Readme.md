@@ -19,8 +19,7 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
 
 ## CDN Script Tags
 ```html
-  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.6/dist/svd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.6/dist/globalfit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.7/dist/globalfit.min.js"></script>
 ```
 
 ## Features
@@ -71,9 +70,7 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
       <!-- <script src="path/to/globalfit.js"></script> -->
 
       <!-- Option 2: CDN (Recommended) -->
-      <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/svd.min.js"></script>
-      <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/globalfit.min.js"></script>
-
+      <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.7/dist/globalfit.min.js"></script>
       <script>
         // Your code to use lmFitGlobal here
       </script>

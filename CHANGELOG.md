@@ -1,6 +1,6 @@
 # Changelog
 
-## Version 1.2.6
+## Version 1.2.7
 - **Refactored Logging**: Replaced `console.log` statements with a robust logging utility that respects the `logLevel` option.
 - **Improved Documentation**: Enhanced inline comments and function documentation for clarity.
 - **Organized Code**: Grouped related functions and constants for better readability and maintainability.
