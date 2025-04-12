@@ -6,9 +6,9 @@ Designed to run natively in modern web browsers or Node.js environments without 
 
 Code has been adapted from the original Fortran project Savuka: https://osmanbilsel.com/software/savuka-a-general-purpose-global-analysis-program/
 
-**Version:** 1.2.6
+**Version:** 1.2.7
 
-## What's New in 1.2.6
+## What's New in 1.2.7
 - **Improved Logging**: Added a robust logging utility that respects the `logLevel` option (`none`, `error`, `warn`, `info`, `debug`).
 - **Enhanced Documentation**: Improved inline comments and organized code for better readability.
 - **Performance Optimizations**: Streamlined handling of large datasets and parameter structures.
