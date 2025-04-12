@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Global Curve Fitter Example (New LinkMap Compatible - Minimal)</title>
+    <title>GlobalFitJS Curve Fitter Example</title>
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <!-- Link to external CSS (Optional) -->
-    <link rel="stylesheet" href="style.css">
+    <!-- <link rel="stylesheet" href="style.css"> -->
     <!-- Basic Styles -->
     <style>
         body { font-family: sans-serif; padding-top: 20px; padding-bottom: 50px;}
@@ -21,7 +21,6 @@
         .fitting-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.7); display: none; justify-content: center; align-items: center; z-index: 1050; }
         #fit-params-container { max-height: 300px; overflow-y: auto; }
         #param-table input[type="number"], #param-table input[type="text"] { width: 100px; }
-        /* Use the CSS fix for checkboxes */
         #param-table td input[type="checkbox"].form-check-input {
             appearance: checkbox !important; -webkit-appearance: checkbox !important; -moz-appearance: checkbox !important;
             width: 1em !important; height: 1em !important; margin: auto !important;
@@ -79,13 +78,14 @@
              <h5>4. Fit Data</h5>
             <ul>
               <li>Adjust the fitting tolerance and maximum iterations if needed.</li>
+              <li>**Optional:** Enter a Confidence Interval level (e.g., 0.95 for 95%) to calculate and plot CI bands for the fitted curves. Leave blank or invalid to skip.</li>
               <li>Click "Run Fit". The `lmFitGlobal` algorithm will run to find the best-fit parameters based on the simulated data, respecting the 'Fix' and 'Link ID' settings. A loading indicator will show while fitting.</li>
             </ul>
              <h5>5. Results</h5>
             <ul>
-              <li><strong>Fit Output & Stats:</strong> Shows the verbose log from the fitting algorithm, followed by calculated statistics (Chi-Squared, DoF, AIC, BIC, etc.).</li>
+              <li><strong>Fit Output & Stats:</strong> Shows the verbose log from the fitting algorithm, followed by calculated statistics (Chi-Squared, DoF, CI Status etc.).</li>
               <li><strong>Fitted Parameters (Active):</strong> Lists the final optimized values and estimated standard errors for only the parameters that were *not* fixed and were the "master" parameter in any link group.</li>
-              <li>The plots update to show the fitted model line(s) and the residuals ((data-fit)/error).</li>
+              <li>The plots update to show the fitted model line(s) (and CI bands if calculated) and the residuals ((data-fit)/error).</li>
             </ul>
           </div>
           <div class="modal-footer">
@@ -99,7 +99,7 @@
 
     <div class="container">
         <div class="d-flex justify-content-between align-items-center">
-             <h1>Global Curve Fitting Simulator (New LinkMap Compatible - Minimal)</h1> <!-- Adjusted Title -->
+             <h1>GlobalFitJS Curve Fitter Example</h1> <!-- Adjusted Title -->
              <button class="btn btn-outline-info btn-sm" id="show-info-btn" title="Show Usage Info">
                  <i class="bi bi-info-circle-fill"></i> Help
              </button>
@@ -136,6 +136,32 @@
              <div class="col-auto"><input type="number" id="fit-tolerance" class="form-control form-control-sm" value="1e-6" step="1e-7" min="1e-10"></div>
              <div class="col-auto"><label for="fit-max-iter" class="col-form-label">Max Iter:</label></div>
              <div class="col-auto"><input type="number" id="fit-max-iter" class="form-control form-control-sm" value="100" step="10" min="10"></div>
+             <!-- NEW: Confidence Interval Input -->
+             <div class="col-auto"><label for="fit-confidence-level" class="col-form-label">Conf. Interval (0-1):</label></div>
+             <div class="col-auto"><input type="number" id="fit-confidence-level" class="form-control form-control-sm" value="0.95" step="0.01" min="0" max="1" placeholder="e.g., 0.95"></div>
+             <!-- End NEW -->
+             <!-- NEW: Covariance Lambda Input -->
+             <div class="col-auto"><label for="fit-cov-lambda" class="col-form-label" title="Regularization for Covariance Matrix Inversion">Cov. Lambda:</label></div>
+             <div class="col-auto"><input type="number" id="fit-cov-lambda" class="form-control form-control-sm" value="1e-9" step="1e-9" min="0" placeholder="e.g., 1e-9"></div>
+             <!-- End NEW -->
+             <!-- NEW: Bootstrap Fallback Inputs -->
+             <div class="col-auto form-check form-switch" title="Fallback to slower Bootstrap CI if standard method has issues">
+                 <input class="form-check-input" type="checkbox" role="switch" id="fit-bootstrap-fallback" checked>
+                 <label class="form-check-label" for="fit-bootstrap-fallback">Bootstrap Fallback</label>
+             </div>
+             <div class="col-auto">
+                 <label for="fit-bootstrap-samples" class="col-form-label" title="Number of samples for Bootstrap Fallback">BS Samples:</label>
+             </div>
+             <div class="col-auto">
+                 <input type="number" id="fit-bootstrap-samples" class="form-control form-control-sm" value="200" step="50" min="10">
+             </div>
+             <!-- End NEW -->
+             <!-- NEW: Component Curves Option -->
+             <div class="col-auto form-check form-switch" title="Calculate and return individual model component curves">
+                 <input class="form-check-input" type="checkbox" role="switch" id="fit-component-curves">
+                 <label class="form-check-label" for="fit-component-curves">Component Curves</label>
+             </div>
+             <!-- End NEW -->
              <div class="col-auto"><button id="fit-btn" class="btn btn-warning">Run Fit</button></div>
          </div>
         <hr>
@@ -148,8 +174,26 @@
         <hr>
         <!-- Plotting -->
         <h2>6. Plots</h2>
-        <div class="row"><div class="col-12"><div class="chart-container"><canvas id="dataFitChart"></canvas></div><div class="chart-container"><canvas id="residualsChart"></canvas></div></div></div>
+        <div class="row">
+            <div class="col-12">
+                <h3>Data and Combined Fit</h3> <!-- Optional: Clarify heading -->
+                <div class="chart-container">
+                    <canvas id="dataFitChart"></canvas>
+                </div>
 
+                <!-- NEW: Component Plot Section -->
+                <h3>Data and Component Fits</h3>
+                <div class="chart-container">
+                    <canvas id="componentFitChart"></canvas> <!-- New Canvas -->
+                </div>
+                <!-- End NEW -->
+
+                <h3>Fit Residuals</h3>
+                <div class="chart-container">
+                    <canvas id="residualsChart"></canvas>
+                </div>
+            </div>
+        </div>
     </div> <!-- /container -->
 
     <!-- External Libraries -->
@@ -157,15 +201,18 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <!-- Your Custom Scripts (Order Matters!) -->
-    <!-- <script src="svd.js"></script> Load SVD helpers first -->
-    <!-- <script src="globalfit.js"></script> Load fitting logic second (USE v1.2.5) -->
-    <!-- OR for non-minified (ensure svd.js loads first) -->
-    <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/globalfit.min.js"></script>
-      
+    <!-- Assumes svd.js and the updated globalfit.js (v1.3.0+) are loaded -->
+    <!-- Replace with your local file paths -->
+    <!-- <script src="svd.js"></script> -->
+    <!-- <script src="globalfit.js"></script> -->
+    <!-- Or use CDN if available -->
+    <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.6/dist/globalfit.min.js"></script>
+
+
     <!-- UI Interaction Logic -->
     <script>
         // ============================================================================
-        // UI Logic and Simulation (Adapted from original example.html)
+        // UI Logic and Simulation (Adapted for CI)
         // ============================================================================
 
         // --- Debounce Utility ---
@@ -173,7 +220,13 @@
         // --- Model Definitions ---
         const availableModels = { linear: { name: "Linear (m*x)", params: 1, func: function linearModel(p, x) { return [p[0] * x[0]]; } }, constant: { name: "Constant (c)", params: 1, func: function constantModel(p, x) { return [p[0]]; } }, gaussian: { name: "Gaussian (A, xc, w)", params: 3, func: function gaussianModel(p, x) { const [amp, center, stddev] = p; const val = x[0]; if (stddev === 0) return [NaN]; const exponent = -0.5 * Math.pow((val - center) / stddev, 2); if (Math.abs(exponent) > 700) return [0.0]; return [amp * Math.exp(exponent)]; } }, exponential: { name: "Exponential (A*exp(-x/tau))", params: 2, func: function exponentialModel(p, x) { const [amp, tau] = p; if (tau === 0) return [NaN]; const exponent = -x[0] / tau; if (Math.abs(exponent) > 700) return [0.0]; return [amp * Math.exp(exponent)]; } } };
         // --- Global State ---
-        let datasetCount = 0; let simulatedData = null; let fitResultData = null; let dataFitChart = null; let residualsChart = null;
+        let datasetCount = 0; 
+        let simulatedData = null; 
+        let fitResultData = null;
+        let dataFitChart = null; 
+        let residualsChart = null;
+        let componentFitChart = null; // <<< NEW Chart Instance
+
         // --- UI Element References ---
         const datasetsContainer = document.getElementById('datasets-container');
         const addDatasetBtn = document.getElementById('add-dataset-btn');
@@ -186,7 +239,13 @@
         const residualsCanvas = document.getElementById('residualsChart');
         const fittingOverlay = document.getElementById('fitting-overlay');
         const infoBtn = document.getElementById('show-info-btn');
-        let infoModal = null; // Initialize later
+        const ciLevelInput = document.getElementById('fit-confidence-level'); // NEW: CI Input Ref
+        const covLambdaInput = document.getElementById('fit-cov-lambda'); // NEW: Cov Lambda Input Ref
+        const bootstrapFallbackInput = document.getElementById('fit-bootstrap-fallback'); // NEW
+        const bootstrapSamplesInput = document.getElementById('fit-bootstrap-samples'); // NEW
+        const componentCurvesInput = document.getElementById('fit-component-curves'); // NEW
+        const componentFitCanvas = document.getElementById('componentFitChart'); // <<< NEW Canvas Ref
+        let infoModal = null;
 
         // --- Helper Functions ---
         function gaussianRandom(mean = 0, stdev = 1) { let u = 0, v = 0; while(u === 0) u = Math.random(); while(v === 0) v = Math.random(); let num = Math.sqrt( -2.0 * Math.log( u ) ) * Math.cos( 2.0 * Math.PI * v ); return num * stdev + mean; }
@@ -198,344 +257,264 @@
         function removeDatasetBlock(event) { const dsIndex = event.target.dataset.dsindex; const block = document.getElementById(`dataset-${dsIndex}`); if (block) { block.remove(); debouncedGenerateParameterUI(); } }
         function addModelSelection(event) { const dsIndex = event.target.dataset.dsindex; const modelsDiv = document.getElementById(`dataset-${dsIndex}-models`); const modelCount = modelsDiv.querySelectorAll('.model-selection').length; if (modelCount < 3) { const modIndex = modelCount; const newSelection = document.createElement('div'); newSelection.className = 'model-selection mb-2'; newSelection.innerHTML = `<select class="form-select form-select-sm model-select" data-dsindex="${dsIndex}" data-modindex="${modIndex}"> ${generateModelOptions()} </select> <button class="btn btn-outline-danger btn-sm remove-model-btn">X</button>`; modelsDiv.appendChild(newSelection); newSelection.querySelector('.model-select').addEventListener('change', debouncedGenerateParameterUI); newSelection.querySelector('.remove-model-btn').addEventListener('click', removeModelSelection); if (modelsDiv.querySelectorAll('.model-selection').length >= 3) event.target.disabled = true; debouncedGenerateParameterUI(); } }
         function removeModelSelection(event) { const selectionDiv = event.target.closest('.model-selection'); const modelsDiv = selectionDiv.parentElement; const dsIndex = modelsDiv.id.split('-')[1]; if (selectionDiv) { selectionDiv.remove(); document.querySelector(`#dataset-${dsIndex} .add-model-btn`).disabled = false; debouncedGenerateParameterUI(); } }
-
-        // *** generateParameterUI using version that fixed checkbox state/display ***
-        function generateParameterUI() {
-            // --- Store current fix state before clearing ---
-            const oldFixState = new Map();
-            paramTableBody.querySelectorAll('input.fix-checkbox').forEach(cb => {
-                if (cb.dataset.coord) { // Ensure coord exists
-                    oldFixState.set(cb.dataset.coord, cb.checked);
-                }
-            });
-            // --- End store state ---
-
-            paramTableBody.innerHTML = ''; // Clear existing table body
-            let hasParams = false;
-            let currentDsIndices = new Set();
-            datasetsContainer.querySelectorAll('.dataset-block').forEach(block => currentDsIndices.add(parseInt(block.id.split('-')[1])));
-            const sortedDsIndices = Array.from(currentDsIndices).sort((a, b) => a - b);
-
-            sortedDsIndices.forEach(dsIndexUI => { // Use dsIndexUI for DOM IDs/Queries
-                const block = document.getElementById(`dataset-${dsIndexUI}`);
-                if (!block) return;
-                let paramGroupIndex = 0; // This is the Model Group Index
-                block.querySelectorAll('.model-select').forEach(select => {
-                    const modelKey = select.value;
-                    if (modelKey && availableModels[modelKey]) {
-                        hasParams = true;
-                        const modelInfo = availableModels[modelKey];
-                        const numParams = modelInfo.params;
-                        for (let pIdx = 0; pIdx < numParams; pIdx++) { // pIdx is paramIndexInGroup
-                            const coordQueryStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`; // Unique ID for DOM query
-                            const coordDisplayStr = `[${dsIndexUI}, ${paramGroupIndex}, ${pIdx}]`; // Display new format
-                            const row = paramTableBody.insertRow();
-
-                            // --- Restore checked state ---
-                            const isChecked = oldFixState.get(coordQueryStr) || false;
-                            const checkedAttr = isChecked ? 'checked' : '';
-                            // --- End restore state ---
-
-                            // *** Use simplified Checkbox Cell HTML ***
-                            row.innerHTML = `
-                                <td>${dsIndexUI}</td>
-                                <td>${paramGroupIndex} (${modelKey})</td>
-                                <td>${pIdx}</td>
-                                <td><small>${coordDisplayStr}</small></td>
-                                <td><input type="number" class="form-control form-control-sm param-input" data-coord='${coordQueryStr}' value="${getDefaultParamValue(modelKey, pIdx)}" step="0.1"></td>
-                                <td class="text-center align-middle">
-                                    <input class="form-check-input fix-checkbox" type="checkbox" data-coord='${coordQueryStr}' ${checkedAttr} style="margin: auto;">
-                                </td>
-                                <td><input type="text" class="form-control form-control-sm link-input" data-coord='${coordQueryStr}'></td>
-                            `;
-                            // *** END MODIFICATION ***
-                        }
-                        paramGroupIndex++;
-                    }
-                });
-            });
-
-             if (!hasParams) {
-                 paramTableBody.innerHTML = '<tr><td colspan="7" class="text-center"><i>Define datasets and models first.</i></td></tr>';
-             }
-        }
+        function generateParameterUI() { const oldFixState = new Map(); paramTableBody.querySelectorAll('input.fix-checkbox').forEach(cb => { if (cb.dataset.coord) oldFixState.set(cb.dataset.coord, cb.checked); }); paramTableBody.innerHTML = ''; let hasParams = false; let currentDsIndices = new Set(); datasetsContainer.querySelectorAll('.dataset-block').forEach(block => currentDsIndices.add(parseInt(block.id.split('-')[1]))); const sortedDsIndices = Array.from(currentDsIndices).sort((a, b) => a - b); sortedDsIndices.forEach(dsIndexUI => { const block = document.getElementById(`dataset-${dsIndexUI}`); if (!block) return; let paramGroupIndex = 0; block.querySelectorAll('.model-select').forEach(select => { const modelKey = select.value; if (modelKey && availableModels[modelKey]) { hasParams = true; const modelInfo = availableModels[modelKey]; const numParams = modelInfo.params; for (let pIdx = 0; pIdx < numParams; pIdx++) { const coordQueryStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`; const coordDisplayStr = `[${dsIndexUI}, ${paramGroupIndex}, ${pIdx}]`; const row = paramTableBody.insertRow(); const isChecked = oldFixState.get(coordQueryStr) || false; const checkedAttr = isChecked ? 'checked' : ''; row.innerHTML = ` <td>${dsIndexUI}</td> <td>${paramGroupIndex} (${modelKey})</td> <td>${pIdx}</td> <td><small>${coordDisplayStr}</small></td> <td><input type="number" class="form-control form-control-sm param-input" data-coord='${coordQueryStr}' value="${getDefaultParamValue(modelKey, pIdx)}" step="0.1"></td> <td class="text-center align-middle"> <input class="form-check-input fix-checkbox" type="checkbox" data-coord='${coordQueryStr}' ${checkedAttr} style="margin: auto;"> </td> <td><input type="text" class="form-control form-control-sm link-input" data-coord='${coordQueryStr}'></td> `; } paramGroupIndex++; } }); }); if (!hasParams) { paramTableBody.innerHTML = '<tr><td colspan="7" class="text-center"><i>Define datasets and models first.</i></td></tr>'; } }
         function getDefaultParamValue(modelKey, pIdx) { if (modelKey === 'gaussian') return [10, 5, 1][pIdx]; if (modelKey === 'linear') return 1; if (modelKey === 'constant') return 0; if (modelKey === 'exponential') return [10, 2][pIdx]; return 1; }
 
         // --- Simulation & Fitting ---
+        function gatherFitInputs(validate = true) { const initialParamsStructure = []; const modelFunctionStructure = []; const fixMapStructure = []; const finalLinkMap = []; const sortedDsIndices = Array.from(datasetsContainer.querySelectorAll('.dataset-block')).map(block => parseInt(block.id.split('-')[1])).sort((a, b) => a - b); sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => { const block = document.getElementById(`dataset-${dsIndexUI}`); if (!block) return; initialParamsStructure[filteredDsIndex] = []; modelFunctionStructure[filteredDsIndex] = []; fixMapStructure[filteredDsIndex] = []; finalLinkMap[filteredDsIndex] = []; let paramGroupIndex = 0; block.querySelectorAll('.model-select').forEach(select => { const modelKey = select.value; if (modelKey && availableModels[modelKey]) { const modelInfo = availableModels[modelKey]; const currentParamGroup = []; const currentFixMapGroup = []; const currentLinkMapGroup = []; for (let pIdx = 0; pIdx < modelInfo.params; pIdx++) { const coordQueryStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`; const valueInput = document.querySelector(`input.param-input[data-coord='${coordQueryStr}']`); const fixInput = document.querySelector(`input.fix-checkbox[data-coord='${coordQueryStr}']`); const linkInput = document.querySelector(`input.link-input[data-coord='${coordQueryStr}']`); if (!valueInput) { if (validate) throw new Error(`Param input missing: ${coordQueryStr}`); else continue; } const value = parseFloat(valueInput.value); if (validate && isNaN(value)) throw new Error(`Invalid value: ${coordQueryStr}`); currentParamGroup.push(value); currentFixMapGroup.push(fixInput ? fixInput.checked : false); let linkIdValue = null; if (linkInput) { const linkId = linkInput.value.trim(); if (linkId) { linkIdValue = linkId; } } currentLinkMapGroup.push(linkIdValue); } initialParamsStructure[filteredDsIndex].push(currentParamGroup); fixMapStructure[filteredDsIndex].push(currentFixMapGroup); finalLinkMap[filteredDsIndex].push(currentLinkMapGroup); modelFunctionStructure[filteredDsIndex].push(availableModels[modelKey].func); paramGroupIndex++; } }); if (initialParamsStructure[filteredDsIndex].length === 0) { initialParamsStructure[filteredDsIndex] = undefined; modelFunctionStructure[filteredDsIndex] = undefined; fixMapStructure[filteredDsIndex] = undefined; finalLinkMap[filteredDsIndex] = undefined; } }); const finalInitialParams = initialParamsStructure.filter(el => el !== undefined); const finalModelFunctions = modelFunctionStructure.filter(el => el !== undefined); const finalFixMap = fixMapStructure.filter(el => el !== undefined); const finalLinkMapStructure = finalLinkMap.filter(el => el !== undefined); return { initialParamsStructure: finalInitialParams, modelFunctionStructure: finalModelFunctions, fixMapStructure: finalFixMap, linkMap: finalLinkMapStructure }; }
+        function gatherAndLinkSimulationParams() { const { initialParamsStructure, linkMap } = gatherFitInputs(true); const flatParams = []; const paramCoords = []; let flatIdx = 0; initialParamsStructure.forEach((dsParams, dsIdx) => { dsParams.forEach((pArray, pIdx) => { pArray.forEach((pValue, vIdx) => { flatParams.push(pValue); paramCoords.push({ coord: [dsIdx, pIdx, vIdx], flatIndex: flatIdx }); flatIdx++; }); }); }); const nTotalParamsSim = flatParams.length; const masterMapSim = new Array(nTotalParamsSim).fill(-1); const linkGroupsByIdSim = {}; if (linkMap && Array.isArray(linkMap)) { paramCoords.forEach(({ coord, flatIndex }) => { const [dsIdx, paramIdx, valIdx] = coord; const groupId = linkMap[dsIdx]?.[paramIdx]?.[valIdx]; if (groupId !== null && groupId !== undefined && groupId !== '') { if (!linkGroupsByIdSim[groupId]) { linkGroupsByIdSim[groupId] = []; } linkGroupsByIdSim[groupId].push(flatIndex); } }); Object.values(linkGroupsByIdSim).forEach(flatIndices => { if (flatIndices.length < 2) return; const masterFlatIndexSim = flatIndices[0]; flatIndices.forEach(currentFlatIndex => { if (currentFlatIndex !== masterFlatIndexSim) { masterMapSim[currentFlatIndex] = masterFlatIndexSim; } }); }); } const linkedFlatParams = [...flatParams]; for (let i = 0; i < nTotalParamsSim; i++) { if (masterMapSim[i] !== -1) { const masterIdx = masterMapSim[i]; if (masterIdx < 0 || masterIdx >= linkedFlatParams.length) { console.error(`Sim linking error: Invalid master index ${masterIdx} for slave ${i}`); continue; } linkedFlatParams[i] = linkedFlatParams[masterIdx]; } } const finalSimParams = []; let currentFlatIdxSim = 0; initialParamsStructure.forEach((dsParams, dsIdx) => { finalSimParams[dsIdx] = []; dsParams.forEach((pArray, pIdx) => { finalSimParams[dsIdx][pIdx] = []; pArray.forEach((_, vIdx) => { if (currentFlatIdxSim >= linkedFlatParams.length) { console.error("Index out of bounds during sim param reconstruction"); finalSimParams[dsIdx][pIdx][vIdx] = NaN; } else { finalSimParams[dsIdx][pIdx][vIdx] = linkedFlatParams[currentFlatIdxSim]; } currentFlatIdxSim++; }); }); }); if (currentFlatIdxSim !== nTotalParamsSim) { console.warn(`Sim param reconstruction mismatch: Processed ${currentFlatIdxSim} vs expected ${nTotalParamsSim}`); } return finalSimParams; }
 
-        // *** MODIFIED gatherFitInputs to create NEW linkMap format ***
-        function gatherFitInputs(validate = true) {
-            // console.log("--- Running gatherFitInputs ---"); // Optional: uncomment for debug
-            const initialParamsStructure = [];
-            const modelFunctionStructure = [];
-            const fixMapStructure = [];
-            const finalLinkMap = []; // *** Initialize NEW linkMap structure ***
-
-            const sortedDsIndices = Array.from(datasetsContainer.querySelectorAll('.dataset-block'))
-                                        .map(block => parseInt(block.id.split('-')[1]))
-                                        .sort((a, b) => a - b);
-            // console.log("Sorted Dataset Indices from UI:", sortedDsIndices);
-
-            sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => {
-                const block = document.getElementById(`dataset-${dsIndexUI}`);
-                if (!block) return;
-                // console.log(`Processing Dataset UI Index: ${dsIndexUI}, Filtered Index: ${filteredDsIndex}`);
-
-                initialParamsStructure[filteredDsIndex] = [];
-                modelFunctionStructure[filteredDsIndex] = [];
-                fixMapStructure[filteredDsIndex] = [];
-                finalLinkMap[filteredDsIndex] = [];
-
-                let paramGroupIndex = 0;
-                block.querySelectorAll('.model-select').forEach(select => {
-                    const modelKey = select.value;
-                    // console.log(`  Model Select - dsIndexUI=${dsIndexUI}, modIndex=${select.dataset.modindex}, modelKey=${modelKey || 'None'}`);
-                    if (modelKey && availableModels[modelKey]) {
-                        const modelInfo = availableModels[modelKey];
-                        const currentParamGroup = [];
-                        const currentFixMapGroup = [];
-                        const currentLinkMapGroup = [];
-
-                        for (let pIdx = 0; pIdx < modelInfo.params; pIdx++) {
-                            const coordQueryStr = `[[${dsIndexUI}, ${paramGroupIndex}], ${pIdx}]`;
-                            const valueInput = document.querySelector(`input.param-input[data-coord='${coordQueryStr}']`);
-                            const fixInput = document.querySelector(`input.fix-checkbox[data-coord='${coordQueryStr}']`);
-                            const linkInput = document.querySelector(`input.link-input[data-coord='${coordQueryStr}']`);
-
-                            if (!valueInput) { if (validate) throw new Error(`Param input missing: ${coordQueryStr}`); else continue; }
-                            const value = parseFloat(valueInput.value); if (validate && isNaN(value)) throw new Error(`Invalid value: ${coordQueryStr}`);
-
-                            currentParamGroup.push(value);
-                            // *** Read checkbox state directly ***
-                            currentFixMapGroup.push(fixInput ? fixInput.checked : false);
-
-                            let linkIdValue = null;
-                            if (linkInput) {
-                                const linkId = linkInput.value.trim();
-                                if (linkId) { linkIdValue = linkId; }
-                            }
-                            currentLinkMapGroup.push(linkIdValue);
-                            // console.log(`      Param ${pIdx}: Value=${value}, Fixed=${currentFixMapGroup[pIdx]}, LinkID Input Value='${linkInput ? linkInput.value.trim() : ''}', Stored LinkID=${linkIdValue}`);
-                        }
-                        initialParamsStructure[filteredDsIndex].push(currentParamGroup);
-                        fixMapStructure[filteredDsIndex].push(currentFixMapGroup);
-                        finalLinkMap[filteredDsIndex].push(currentLinkMapGroup);
-                        modelFunctionStructure[filteredDsIndex].push(availableModels[modelKey].func);
-                        paramGroupIndex++;
-                    }
-                });
-                 if (initialParamsStructure[filteredDsIndex].length === 0) {
-                     // console.log(`Dataset ${filteredDsIndex} (UI ${dsIndexUI}) has no valid models, marking for filtering.`);
-                     initialParamsStructure[filteredDsIndex] = undefined;
-                     modelFunctionStructure[filteredDsIndex] = undefined;
-                     fixMapStructure[filteredDsIndex] = undefined;
-                     finalLinkMap[filteredDsIndex] = undefined;
-                 }
-            });
-
-             const finalInitialParams = initialParamsStructure.filter(el => el !== undefined);
-             const finalModelFunctions = modelFunctionStructure.filter(el => el !== undefined);
-             const finalFixMap = fixMapStructure.filter(el => el !== undefined);
-             const finalLinkMapStructure = finalLinkMap.filter(el => el !== undefined);
-
-            // console.log("--- Finished gatherFitInputs ---");
-            // console.log("Gathered Link Map Structure:", JSON.stringify(finalLinkMapStructure));
-
-            return {
-                 initialParamsStructure: finalInitialParams,
-                 modelFunctionStructure: finalModelFunctions,
-                 fixMapStructure: finalFixMap,
-                 linkMap: finalLinkMapStructure // Return the new structure
-            };
-        }
-
-        // *** MODIFIED gatherAndLinkSimulationParams to use NEW linkMap format ***
-        function gatherAndLinkSimulationParams() {
-            const { initialParamsStructure, linkMap } = gatherFitInputs(true); // Get new linkMap structure
-
-            const flatParams = [];
-            const paramCoords = [];
-            let flatIdx = 0;
-            initialParamsStructure.forEach((dsParams, dsIdx) => {
-                dsParams.forEach((pArray, pIdx) => {
-                    pArray.forEach((pValue, vIdx) => {
-                        flatParams.push(pValue);
-                        paramCoords.push({ coord: [dsIdx, pIdx, vIdx], flatIndex: flatIdx });
-                        flatIdx++;
-                    });
-                });
-            });
-            const nTotalParamsSim = flatParams.length;
-            const masterMapSim = new Array(nTotalParamsSim).fill(-1);
-            const linkGroupsByIdSim = {};
-
-            if (linkMap && Array.isArray(linkMap)) {
-                paramCoords.forEach(({ coord, flatIndex }) => {
-                    const [dsIdx, paramIdx, valIdx] = coord;
-                    const groupId = linkMap[dsIdx]?.[paramIdx]?.[valIdx];
-                    if (groupId !== null && groupId !== undefined && groupId !== '') {
-                        if (!linkGroupsByIdSim[groupId]) { linkGroupsByIdSim[groupId] = []; }
-                        linkGroupsByIdSim[groupId].push(flatIndex);
-                    }
-                });
-                Object.values(linkGroupsByIdSim).forEach(flatIndices => {
-                    if (flatIndices.length < 2) return;
-                    const masterFlatIndexSim = flatIndices[0];
-                    flatIndices.forEach(currentFlatIndex => {
-                        if (currentFlatIndex !== masterFlatIndexSim) { masterMapSim[currentFlatIndex] = masterFlatIndexSim; }
-                    });
-                });
-            }
-
-            const linkedFlatParams = [...flatParams];
-            for (let i = 0; i < nTotalParamsSim; i++) {
-                if (masterMapSim[i] !== -1) {
-                    const masterIdx = masterMapSim[i];
-                    if (masterIdx < 0 || masterIdx >= linkedFlatParams.length) { console.error(`Sim linking error: Invalid master index ${masterIdx} for slave ${i}`); continue; }
-                    linkedFlatParams[i] = linkedFlatParams[masterIdx];
-                }
-            }
-
-            const finalSimParams = [];
-            let currentFlatIdxSim = 0;
-            initialParamsStructure.forEach((dsParams, dsIdx) => {
-                finalSimParams[dsIdx] = [];
-                dsParams.forEach((pArray, pIdx) => {
-                    finalSimParams[dsIdx][pIdx] = [];
-                    pArray.forEach((_, vIdx) => {
-                        if (currentFlatIdxSim >= linkedFlatParams.length) { console.error("Index out of bounds during sim param reconstruction"); finalSimParams[dsIdx][pIdx][vIdx] = NaN; }
-                        else { finalSimParams[dsIdx][pIdx][vIdx] = linkedFlatParams[currentFlatIdxSim]; }
-                        currentFlatIdxSim++;
-                    });
-                });
-            });
-            if (currentFlatIdxSim !== nTotalParamsSim) { console.warn(`Sim param reconstruction mismatch: Processed ${currentFlatIdxSim} vs expected ${nTotalParamsSim}`); }
-            return finalSimParams;
-        }
-
-
+        // *** MODIFIED simulateData function ***
         function simulateData() {
-            console.log("Simulating data...");
+            console.log("Simulating data using simulateFromParams...");
             resultsDisplay.textContent = "Simulating data...";
             fitParamsBody.innerHTML = '<tr><td colspan="3" class="text-center"><i>Simulate/Fit first.</i></td></tr>';
-            simulatedData = { x: [], y: [], ye: [] };
-            const noiseStdDev = parseFloat(document.getElementById('noise-level').value) || 0;
-            let allDataValid = true;
+            simulatedData = null; // Reset
+            fitResultData = null; // Reset
+            updatePlots(); // Clear plots
 
             try {
-                const simulationParamsStructure = gatherAndLinkSimulationParams(); // Uses modified version
-                const { modelFunctionStructure } = gatherFitInputs(false);
+                // 1. Get Linked Parameters (using existing logic)
+                const linkedSimParams = gatherAndLinkSimulationParams(); // Can throw error
 
+                // 2. Get Model Functions (using existing logic)
+                const { modelFunctionStructure } = gatherFitInputs(false); // Don't validate strictly
+
+                // 3. Generate dataX structure from UI settings
+                const dataX = [];
+                const datasetConfigsForNoise = [];
                 const sortedDsIndices = Array.from(datasetsContainer.querySelectorAll('.dataset-block'))
                                             .map(block => parseInt(block.id.split('-')[1]))
                                             .sort((a, b) => a - b);
 
-                 if (simulationParamsStructure.length !== sortedDsIndices.length || modelFunctionStructure.length !== sortedDsIndices.length) {
-                     throw new Error("Mismatch between UI datasets and gathered simulation parameters/models.");
-                 }
+                if (linkedSimParams.length !== sortedDsIndices.length || modelFunctionStructure.length !== sortedDsIndices.length) {
+                    throw new Error("Mismatch between UI datasets and gathered simulation parameters/models. Ensure models are selected.");
+                }
+                if (linkedSimParams.length === 0) {
+                    throw new Error("No valid datasets with models defined for simulation.");
+                }
 
                 sortedDsIndices.forEach((dsIndexUI, filteredDsIndex) => {
                     const block = document.getElementById(`dataset-${dsIndexUI}`);
                     if (!block) return;
+
                     const npts = parseInt(document.getElementById(`dataset-${dsIndexUI}-npts`).value);
                     const xmin = parseFloat(document.getElementById(`dataset-${dsIndexUI}-xmin`).value);
                     const xmax = parseFloat(document.getElementById(`dataset-${dsIndexUI}-xmax`).value);
-                    if (isNaN(npts) || npts <= 1 || isNaN(xmin) || isNaN(xmax) || xmax <= xmin) { throw new Error(`Invalid points/range for Dataset ${dsIndexUI}.`); }
-                    const currentX = [], currentY = [], currentYE = [];
-                    const dx = (npts === 1) ? 0 : (xmax - xmin) / (npts - 1);
-                    const modelsForDs = modelFunctionStructure[filteredDsIndex] || [];
-                    const paramsForDs = simulationParamsStructure[filteredDsIndex] || [];
-                    if (modelsForDs.length !== paramsForDs.length) { throw new Error(`Mismatch models/params for dataset index ${filteredDsIndex} (UI ${dsIndexUI}) during simulation.`); }
 
+                    if (isNaN(npts) || npts <= 0) throw new Error(`Invalid Num Points for Dataset ${dsIndexUI}.`);
+                    if (isNaN(xmin)) throw new Error(`Invalid X Min for Dataset ${dsIndexUI}.`);
+                    if (isNaN(xmax)) throw new Error(`Invalid X Max for Dataset ${dsIndexUI}.`);
+                    if (npts > 1 && xmax <= xmin) throw new Error(`X Max must be greater than X Min for Dataset ${dsIndexUI} if Num Points > 1.`);
+
+                    const currentX = [];
+                    const dx = (npts === 1 || xmax === xmin) ? 0 : (xmax - xmin) / (npts - 1);
                     for (let i = 0; i < npts; i++) {
-                        const xi = xmin + i * dx; let yi_true = 0;
-                        modelsForDs.forEach((modelFunc, modelGroupIndex) => {
-                            const componentParams = paramsForDs[modelGroupIndex];
-                            if (!componentParams) { console.warn(`Missing params for model group ${modelGroupIndex} in dataset ${filteredDsIndex} during simulation.`); return; }
-                            try {
-                                const modelResult = modelFunc(componentParams, [xi]);
-                                if (modelResult && modelResult.length > 0 && isFinite(modelResult[0])) { yi_true += modelResult[0]; }
-                            } catch (modelError) { console.error(`Error evaluating model function ${modelGroupIndex} in dataset ${filteredDsIndex} for x=${xi}:`, modelError); }
-                        });
-                        const noise = gaussianRandom(0, noiseStdDev); const yi_noisy = yi_true + noise;
-                        currentX.push(xi); currentY.push(yi_noisy); currentYE.push(Math.max(1e-9, noiseStdDev));
+                        currentX.push(xmin + i * dx);
                     }
-                    simulatedData.x.push(currentX); simulatedData.y.push(currentY); simulatedData.ye.push(currentYE);
+                    dataX.push(currentX);
+                    datasetConfigsForNoise.push({ numPoints: npts });
                 });
 
-                console.log("Simulation complete.");
-                resultsDisplay.textContent = `Data simulated for ${simulatedData.x.length} dataset(s). Noise level: ${noiseStdDev}.`;
+                // 4. Prepare Noise Options for simulateFromParams
+                const noiseStdDevInput = document.getElementById('noise-level');
+                const noiseValue = parseFloat(noiseStdDevInput.value);
+                let noiseStdDevOption = null;
+                let noiseTypeOption = 'none';
+
+                if (!isNaN(noiseValue) && noiseValue > 0) {
+                    noiseStdDevOption = noiseValue;
+                    noiseTypeOption = 'gaussian';
+                    console.log(`Applying global Gaussian noise with std dev: ${noiseStdDevOption}`);
+                } else if (noiseValue === 0) {
+                    console.log("Noise level is 0, no noise will be added.");
+                } else {
+                    console.log(`Invalid noise value "${noiseStdDevInput.value}", no noise will be added.`);
+                }
+
+                const simOptions = {
+                    noiseStdDev: noiseStdDevOption,
+                    noiseType: noiseTypeOption,
+                    logFn: (msg, level) => { if (level === 'error' || level === 'warn') console.warn(msg); else console.log(msg); }
+                };
+
+                // 5. Call the NEW simulation function
+                if (typeof simulateFromParams !== 'function') {
+                    throw new Error("simulateFromParams function not found. Ensure globalfit.js is loaded correctly.");
+                }
+                const simulationResult = simulateFromParams(dataX, modelFunctionStructure, linkedSimParams, simOptions);
+
+                // 6. Process Result
+                if (!simulationResult) {
+                    throw new Error("Simulation function failed. Check console logs.");
+                }
+
+                // 7. Generate 'ye' array based on noise settings used
+                const simulatedYE = [];
+                datasetConfigsForNoise.forEach((config, dsIdx) => {
+                    const noiseSetting = simOptions;
+                    let yeValue = 1.0;
+                    if (noiseSetting.noiseType === 'gaussian' && noiseSetting.noiseStdDev > 0) {
+                        yeValue = noiseSetting.noiseStdDev;
+                    }
+                    simulatedYE.push(new Array(config.numPoints).fill(Math.max(1e-9, yeValue)));
+                });
+
+                // 8. Store data in the expected format for fitting/plotting
+                simulatedData = {
+                    x: simulationResult.x,
+                    y: simulationResult.y,
+                    ye: simulatedYE
+                };
+
+                console.log("Simulation complete using simulateFromParams.");
+                resultsDisplay.textContent = `Data simulated for ${simulatedData.x.length} dataset(s). Noise type: ${noiseTypeOption}, StdDev: ${noiseStdDevOption ?? 'N/A'}.`;
+
                 fitResultData = null;
                 updatePlots();
 
             } catch (error) {
-                console.error("Simulation Error:", error);
-                resultsDisplay.textContent = `Simulation Error: ${error.message}`;
-                simulatedData = null; allDataValid = false;
+                console.error(`Simulation failed: ${error.message}`);
+                resultsDisplay.textContent = `Simulation failed: ${error.message}`;
+                simulatedData = null;
                 updatePlots();
             }
         }
 
-
         async function runFit() {
-            if (!simulatedData || !simulatedData.x || simulatedData.x.length === 0) {
-                 resultsDisplay.textContent = "Please simulate valid data first.";
-                 return;
-            }
+            if (!simulatedData || !simulatedData.x || simulatedData.x.length === 0) { resultsDisplay.textContent = "Please simulate valid data first."; return; }
             console.log("Starting fit..."); resultsDisplay.textContent = ""; fitParamsBody.innerHTML = '<tr><td colspan="3" class="text-center"><i>Fitting...</i></td></tr>'; fittingOverlay.style.display = 'flex';
-            await new Promise(resolve => setTimeout(resolve, 50));
+            await new Promise(resolve => setTimeout(resolve, 50)); // Allow UI to update
 
-            const fitLogger = (message, level) => {
-                const entry = document.createElement('div'); entry.classList.add('log-entry');
-                if (level === 'warn') entry.style.color = 'orange';
-                else if (level === 'error') entry.style.color = 'red';
-                else if (level === 'debug') entry.style.color = 'gray';
-                entry.textContent = `[${level.toUpperCase()}] ${message}`;
-                resultsDisplay.appendChild(entry); resultsDisplay.scrollTop = resultsDisplay.scrollHeight;
+            const fitLogger = (message, level = 'info') => { // <<< Add default level='info'
+                try { // Add try-catch here too for safety
+                    const entry = document.createElement('div');
+                    entry.classList.add('log-entry');
+
+                    // Ensure level is a string before calling toUpperCase
+                    const safeLevel = (typeof level === 'string' ? level : 'info'); // Default again just in case
+
+                    if (safeLevel === 'warn') entry.style.color = 'orange';
+                    else if (safeLevel === 'error') entry.style.color = 'red';
+                    else if (safeLevel === 'debug') entry.style.color = 'gray';
+
+                    entry.textContent = `[${safeLevel.toUpperCase()}] ${message}`; // Use safeLevel
+
+                    // Check if resultsDisplay exists before appending
+                    if (resultsDisplay) {
+                        resultsDisplay.appendChild(entry);
+                        resultsDisplay.scrollTop = resultsDisplay.scrollHeight;
+                    } else {
+                        console.warn("resultsDisplay element not found for logging:", message);
+                    }
+
+                    // Console logging
+                    if (safeLevel === 'error') console.error(message);
+                    else if (safeLevel === 'warn') console.warn(message);
+                    else if (safeLevel === 'debug') console.debug(message);
+                    else console.log(message);
+
+                } catch (logError) {
+                    console.error("Error within fitLogger itself:", logError, "Original message:", message);
+                }
             };
+
             resultsDisplay.innerHTML = '';
 
             try {
-                // *** Use the modified function to get inputs in the correct format ***
                 const { initialParamsStructure, modelFunctionStructure, fixMapStructure, linkMap } = gatherFitInputs(true);
-
-                fitLogger(`Passing linkMap to fitter: ${JSON.stringify(linkMap)}`, 'debug'); // Log the linkMap
-
+                fitLogger(`Passing linkMap to fitter: ${JSON.stringify(linkMap)}`, 'debug');
                 if (initialParamsStructure.length !== simulatedData.x.length) { throw new Error(`Mismatch between defined datasets (${initialParamsStructure.length}) and simulated datasets (${simulatedData.x.length}). Please re-simulate.`); }
+
+                // --- Get Confidence Interval Level ---
+                let requestedCI = null;
+                const ciValueStr = ciLevelInput.value.trim(); // Use the reference defined earlier
+                if (ciValueStr !== "") {
+                    const ciVal = parseFloat(ciValueStr);
+                    // lmFitGlobal does validation, but we can log here too
+                    if (!isNaN(ciVal) && ciVal > 0 && ciVal < 1) {
+                        requestedCI = ciVal;
+                        fitLogger(`Requesting Confidence Interval: ${requestedCI * 100}%`, 'info');
+                    } else {
+                        fitLogger(`Invalid Confidence Level input: "${ciValueStr}". CI will not be calculated.`, 'warn');
+                    }
+                } else {
+                    fitLogger(`Confidence Level input is empty. CI will not be calculated.`, 'info');
+                }
+                // --- End CI Level ---
+
+                // --- Get Covariance Lambda Level ---
+                let requestedCovLambda = 1e-9; // Default if input is invalid
+                const covLambdaStr = covLambdaInput.value.trim();
+                if (covLambdaStr !== "") {
+                    const covL = parseFloat(covLambdaStr);
+                    if (!isNaN(covL) && covL >= 0) {
+                        requestedCovLambda = covL;
+                        fitLogger(`Using Covariance Lambda: ${requestedCovLambda.toExponential(2)}`, 'info');
+                    } else {
+                        fitLogger(`Invalid Covariance Lambda input: "${covLambdaStr}". Using default ${requestedCovLambda.toExponential(2)}.`, 'warn');
+                    }
+                } else {
+                    fitLogger(`Covariance Lambda input empty. Using default ${requestedCovLambda.toExponential(2)}.`, 'info');
+                }
+                // --- End Cov Lambda ---
+
+                // --- Get Bootstrap Options ---
+                const useBootstrapFallback = bootstrapFallbackInput.checked;
+                let numBootstrapSamples = parseInt(bootstrapSamplesInput.value) || 200;
+                if (numBootstrapSamples < 10) numBootstrapSamples = 10; // Minimum reasonable samples
+                fitLogger(`Bootstrap Fallback Enabled: ${useBootstrapFallback}`, 'info');
+                if (useBootstrapFallback) {
+                    fitLogger(`Bootstrap Samples: ${numBootstrapSamples}`, 'info');
+                }
+                // --- End Bootstrap Options ---
+
+                // --- Get Component Curve Option ---
+                const calculateComponentModels = componentCurvesInput.checked;
+                fitLogger(`Calculate Component Curves: ${calculateComponentModels}`, 'info');
+                // --- End Component Curve Option ---
 
                 const shouldCalcFit = true; const fitCurvePoints = 300; const calcFitOption = shouldCalcFit ? { numPoints: fitCurvePoints } : false;
 
-                // *** MODIFIED: Pass fixMap and linkMap in options object ***
                 const fitOptions = {
                     maxIterations: parseInt(document.getElementById('fit-max-iter').value) || 100,
                     errorTolerance: parseFloat(document.getElementById('fit-tolerance').value) || 1e-6,
                     gradientTolerance: parseFloat(document.getElementById('fit-tolerance').value) || 1e-6,
                     fixMap: fixMapStructure,
-                    linkMap: linkMap, // Pass the new linkMap structure
+                    linkMap: linkMap,
+                    confidenceInterval: requestedCI, // Pass the requested level (or null)
+                    bootstrapFallback: useBootstrapFallback, // Pass option
+                    numBootstrapSamples: numBootstrapSamples, // Pass option
+                    calculateComponentModels: calculateComponentModels, // Pass option
                     onLog: fitLogger,
-                    logLevel: 'info', // Default to info, can change to debug
+                    logLevel: 'info',
                     calculateFittedModel: calcFitOption,
-                    covarianceLambda: 1e-9 // Keep regularization from v1.2.5
+                    covarianceLambda: requestedCovLambda // Pass the requested lambda
                 };
 
                 if (typeof lmFitGlobal !== 'function') { throw new Error("lmFitGlobal function not found."); }
 
-                // *** Call lmFitGlobal with the options object ***
-                fitResultData = lmFitGlobal(simulatedData, modelFunctionStructure, initialParamsStructure, fitOptions);
+                fitResultData = await lmFitGlobal(simulatedData, modelFunctionStructure, initialParamsStructure, fitOptions);
+                console.log("Fit Result:", fitResultData);
 
-                console.log("Fit Result:", fitResultData); // Log full result for inspection
+                // ...existing code...
+                if (fitResultData && fitResultData.fittedModelComponentCurves) {
+                    console.log("Fitted Component Curves:", fitResultData.fittedModelComponentCurves);
+                    fitLogger("Component curves calculated successfully (see console).", "info");
+                } else if (calculateComponentModels) {
+                    fitLogger("Component curves requested but not calculated (check logs for errors).", "warn");
+                }
 
                 // --- Display Fit Results ---
                 fitParamsBody.innerHTML = '';
                 if (fitResultData.error) {
                     fitParamsBody.innerHTML = `<tr><td colspan="3" class="text-danger">Fit Failed: ${fitResultData.error}</td></tr>`;
-                    fitLogger(`Fit Error recorded in result object: ${fitResultData.error}`, 'error');
+                    // Logger already captured internal errors
                 } else if (fitResultData.p_active && fitResultData.p_active.length > 0) {
                     fitResultData.p_active.forEach((pVal, idx) => {
                         const label = fitResultData.activeParamLabels[idx] || `Active ${idx}`;
                         const errorVal = fitResultData.parameterErrors ? fitResultData.parameterErrors[idx] : NaN;
                         const row = fitParamsBody.insertRow();
-                        // Use Math.abs for error display as per v1.2.5
                         const errorDisplay = isNaN(errorVal) ? 'N/A' : errorVal.toExponential(3);
                         row.innerHTML = `<td>${label}</td><td>${pVal.toExponential(5)}</td><td>${errorDisplay}</td>`;
                     });
@@ -546,21 +525,17 @@
                 }
 
                 if (!fitResultData.error) {
-                    const statsHtml = `
-                        <hr style="margin-top: 10px; margin-bottom: 10px;">
-                        <strong>Fit Statistics:</strong><br>
-                        Converged: ${fitResultData.converged}<br>
-                        Iterations: ${fitResultData.iterations ?? 'N/A'}<br>
-                        Total Points (N): ${fitResultData.totalPoints ?? 'N/A'}<br>
-                        Active Parameters (K): ${fitResultData.activeParamLabels?.length ?? 'N/A'}<br>
-                        Degrees of Freedom (DoF): ${fitResultData.degreesOfFreedom?.toFixed(0) ?? 'N/A'}<br>
-                        Chi-Squared: ${fitResultData.chiSquared?.toExponential(5) ?? 'N/A'}<br>
-                        Reduced Chi-Squared: ${fitResultData.reducedChiSquared?.toExponential(5) ?? 'N/A'}
-                    `; // Removed AIC/BIC for brevity, can be added back
-                    resultsDisplay.innerHTML += statsHtml;
+                    // Stats are logged by lmFitGlobal via fitLogger
+                    // We can add a summary here if desired, but the detailed log is already there.
+                    const statsHeader = `<hr style="margin-top: 10px; margin-bottom: 10px;"><strong>Fit Statistics Summary:</strong><br>`;
+                    let summaryHtml = `Converged: ${fitResultData.converged}<br>`;
+                    const bootstrapStatus = fitResultData.bootstrapUsed ? 'Yes' : 'No';
+                    summaryHtml += `Bootstrap Fallback Used: ${bootstrapStatus}<br>`;
+                    // Add more summary stats if needed...
+                    resultsDisplay.innerHTML += statsHeader + summaryHtml; // Optional summary addition
                     resultsDisplay.scrollTop = resultsDisplay.scrollHeight;
                 }
-                updatePlots();
+                updatePlots(); // Update plots with fit data and potentially CI bands
 
             } catch (error) {
                 console.error("Fit Execution Error:", error);
@@ -573,56 +548,272 @@
             }
         }
 
-
+        // --- updatePlots Function ---
         function updatePlots() {
-            const colors = ['#0d6efd', '#dc3545', '#198754', '#ffc107', '#6f42c1', '#fd7e14'];
-            const dataFitCtx = dataFitCanvas.getContext('2d'); if (dataFitChart) dataFitChart.destroy();
-            const residualsCtx = residualsCanvas.getContext('2d'); if (residualsChart) residualsChart.destroy();
-            const dataFitDatasets = [], residualDatasets = [];
+            const colors = ['#0d6efd', '#dc3545', '#198754', '#ffc107', '#6f42c1', '#fd7e14']; // Main colors
+            const dashStyles = [[5, 5], [10, 3], [2, 2], [8, 2, 2, 2], [6, 2], [1, 3]]; // Different dash styles
 
-            if (simulatedData && simulatedData.x && simulatedData.x.length > 0) {
-                simulatedData.x.forEach((xData, dsIndex) => {
-                    if (!simulatedData.y[dsIndex] || xData.length !== simulatedData.y[dsIndex].length) { console.warn(`Skipping plot for dataset ${dsIndex}: Inconsistent data lengths.`); return; }
-                    dataFitDatasets.push({ label: `Data ${dsIndex}`, data: xData.map((x, i) => ({ x: x, y: simulatedData.y[dsIndex][i] })), borderColor: colors[dsIndex * 2 % colors.length], backgroundColor: colors[dsIndex * 2 % colors.length] + '80', type: 'scatter', pointRadius: 4, showLine: false });
-                });
+            // --- Get Contexts & Destroy Old Charts ---
+            const dataFitCtx = dataFitCanvas.getContext('2d');
+            const residualsCtx = residualsCanvas.getContext('2d');
+            const componentFitCtx = componentFitCanvas.getContext('2d');
+
+            if (dataFitChart) { try { dataFitChart.destroy(); dataFitChart = null; } catch(e){ console.error("Error destroying data chart:", e); } }
+            if (residualsChart) { try { residualsChart.destroy(); residualsChart = null; } catch(e){ console.error("Error destroying residuals chart:", e); } }
+            if (componentFitChart) { try { componentFitChart.destroy(); componentFitChart = null; } catch(e){ console.error("Error destroying component chart:", e); } }
+
+            if (!dataFitCtx || !residualsCtx || !componentFitCtx) {
+                console.error("One or more canvas elements not found for plotting.");
+                return;
             }
 
-            if (fitResultData && !fitResultData.error) {
-                if (fitResultData.fittedModelCurves) {
-                    fitResultData.fittedModelCurves.forEach((curve, dsIndex) => {
-                        if (curve && curve.x && curve.y) { dataFitDatasets.push({ label: `Fit ${dsIndex}`, data: curve.x.map((x, i) => ({ x: x, y: curve.y[i] })), borderColor: colors[(dsIndex * 2 + 1) % colors.length], borderWidth: 2, type: 'line', pointRadius: 0, tension: 0.1, fill: false }); }
+            try {
+                const dataFitDatasets = [];
+                const residualDatasets = [];
+                const componentFitDatasets = [];
+
+                let yMinOverall = Infinity;
+                let yMaxOverall = -Infinity;
+
+                // 1. Process Simulated Data (Scatter) & Find Y Range
+                if (simulatedData && simulatedData.x && simulatedData.x.length > 0) {
+                    simulatedData.x.forEach((xData, dsIndex) => {
+                        if (!simulatedData.y[dsIndex] || xData.length !== simulatedData.y[dsIndex].length) { 
+                            console.warn(`Skipping plot for dataset ${dsIndex}: Inconsistent data lengths.`); 
+                            return; 
+                        }
+                        const yData = simulatedData.y[dsIndex];
+                        const scatterData = xData.map((x, i) => {
+                            const y = yData[i];
+                            if (isFinite(y)) {
+                                yMinOverall = Math.min(yMinOverall, y);
+                                yMaxOverall = Math.max(yMaxOverall, y);
+                            }
+                            return { x, y };
+                        });
+
+                        const datasetColor = colors[dsIndex % colors.length];
+                        const scatterDatasetConfig = {
+                            label: `Data ${dsIndex}`, data: scatterData, borderColor: datasetColor,
+                            backgroundColor: datasetColor + '80', type: 'scatter', pointRadius: 4,
+                            showLine: false, order: 0
+                        };
+                        dataFitDatasets.push({ ...scatterDatasetConfig });
+                        componentFitDatasets.push({ ...scatterDatasetConfig });
                     });
+                } else {
+                    console.log("No simulated data to plot.");
                 }
-                if (fitResultData.residualsPerSeries) {
-                     fitResultData.residualsPerSeries.forEach((residuals, dsIndex) => {
-                         if (residuals && simulatedData.x[dsIndex]) { residualDatasets.push({ label: `Residuals ${dsIndex}`, data: simulatedData.x[dsIndex].map((x, i) => ({ x: x, y: residuals[i] ?? NaN })), borderColor: colors[dsIndex * 2 % colors.length], backgroundColor: colors[dsIndex * 2 % colors.length] + '80', type: 'scatter', pointRadius: 3, showLine: false }); }
-                     });
+
+                // 2. Process Fit Results
+                if (fitResultData && !fitResultData.error) {
+                    // a) Combined Fit Curve and CI Bands (for dataFitChart)
+                    if (fitResultData.fittedModelCurves) {
+                        fitResultData.fittedModelCurves.forEach((curve, dsIndex) => {
+                            if (!curve || !curve.x || !curve.y || curve.x.length !== curve.y.length) { 
+                                console.warn(`Skipping main curve for dsIndex ${dsIndex}: Invalid curve data.`); 
+                                return; 
+                            }
+
+                            const fitColor = colors[dsIndex % colors.length];
+
+                            // --- Main Fit Line ---
+                            dataFitDatasets.push({
+                                label: `Fit ${dsIndex}`,
+                                data: curve.x.map((x, i) => {
+                                    const y = curve.y[i];
+                                    if (isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y };
+                                }),
+                                borderColor: fitColor, borderWidth: 2, type: 'line',
+                                pointRadius: 0, tension: 0.1, fill: false, order: dsIndex * 10 + 1
+                            });
+
+                            // --- CI Band Plotting ---
+                            if (curve.ci_lower && curve.ci_upper &&
+                                curve.ci_lower.length === curve.x.length &&
+                                curve.ci_upper.length === curve.x.length) {
+                                const bandColor = fitColor + '33';
+                                const bandLineColor = 'transparent';
+
+                                const lowerBandData = curve.x.map((x, i) => {
+                                    const y = isFinite(curve.ci_lower[i]) ? curve.ci_lower[i] : null;
+                                    if (y !== null) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y };
+                                });
+                                const upperBandData = curve.x.map((x, i) => {
+                                    const y = isFinite(curve.ci_upper[i]) ? curve.ci_upper[i] : null;
+                                    if (y !== null) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                    return { x, y };
+                                });
+
+                                let lowerBandDatasetIndex = -1;
+
+                                if (lowerBandData.some(p => p.y !== null)) {
+                                    lowerBandDatasetIndex = dataFitDatasets.length;
+                                    dataFitDatasets.push({
+                                        label: `_hidden_lower_${dsIndex}`, data: lowerBandData,
+                                        borderColor: bandLineColor, borderWidth: 0.5, pointRadius: 0,
+                                        fill: false, type: 'line', spanGaps: false, order: dsIndex * 10 + 2
+                                    });
+                                }
+
+                                if (upperBandData.some(p => p.y !== null) && lowerBandDatasetIndex !== -1) {
+                                    dataFitDatasets.push({
+                                        label: `Fit ${dsIndex} CI`, data: upperBandData,
+                                        borderColor: bandLineColor, borderWidth: 0.5, backgroundColor: bandColor,
+                                        pointRadius: 0, fill: { target: lowerBandDatasetIndex },
+                                        type: 'line', spanGaps: false, order: dsIndex * 10 + 3
+                                    });
+                                }
+                            }
+                        });
+                    }
+
+                    // b) Component Fit Curves (for componentFitChart)
+                    if (fitResultData.fittedModelComponentCurves) {
+                        fitResultData.fittedModelComponentCurves.forEach((datasetComponents, dsIndex) => {
+                            if (!Array.isArray(datasetComponents)) { return; }
+                            const baseColor = colors[dsIndex % colors.length];
+
+                            datasetComponents.forEach((componentCurve, modelIdx) => {
+                                if (!componentCurve || !componentCurve.x || !componentCurve.y || componentCurve.x.length !== componentCurve.y.length) { return; }
+
+                                componentFitDatasets.push({
+                                    label: `Comp ${dsIndex}-${modelIdx}`,
+                                    data: componentCurve.x.map((x, i) => {
+                                        const y = componentCurve.y[i];
+                                        if (isFinite(y)) { yMinOverall = Math.min(yMinOverall, y); yMaxOverall = Math.max(yMaxOverall, y); }
+                                        return { x, y: isFinite(y) ? y : null };
+                                    }),
+                                    borderColor: baseColor,
+                                    borderDash: dashStyles[modelIdx % dashStyles.length],
+                                    borderWidth: 1.5, type: 'line', pointRadius: 0,
+                                    tension: 0.1, fill: false, order: dsIndex * 10 + modelIdx + 1
+                                });
+                            });
+                        });
+                    }
+
+                    // c) Residuals (for residualsChart)
+                    if (fitResultData.residualsPerSeries) {
+                        fitResultData.residualsPerSeries.forEach((residuals, dsIndex) => {
+                            if (residuals && simulatedData?.x?.[dsIndex]) {
+                                residualDatasets.push({
+                                    label: `Residuals ${dsIndex}`,
+                                    data: simulatedData.x[dsIndex].map((x, i) => ({ x, y: residuals[i] ?? NaN })),
+                                    borderColor: colors[dsIndex % colors.length],
+                                    backgroundColor: colors[dsIndex % colors.length] + '80',
+                                    type: 'scatter', pointRadius: 3, showLine: false
+                                });
+                            }
+                        });
+                    }
                 }
+
+                // --- Create Charts ---
+                const yAxisMin = isFinite(yMinOverall) ? yMinOverall - (yMaxOverall - yMinOverall) * 0.1 : undefined;
+                const yAxisMax = isFinite(yMaxOverall) ? yMaxOverall + (yMaxOverall - yMinOverall) * 0.1 : undefined;
+
+                console.log("Final datasets array for Data/Fit Chart:", dataFitDatasets);
+                console.log("Final datasets array for Component Chart:", componentFitDatasets);
+                console.log("Final datasets array for Residuals Chart:", residualDatasets);
+
+
+                // Data/Fit Chart
+                if (dataFitDatasets.length > 0) {
+                    dataFitChart = new Chart(dataFitCtx, {
+                        type: 'scatter',
+                        data: { datasets: dataFitDatasets },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: {
+                                x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } },
+                                y: { title: { display: true, text: 'Y' }, min: yAxisMin, max: yAxisMax }
+                            },
+                            plugins: {
+                                legend: {
+                                    position: 'top',
+                                    labels: { filter: function(item) { return item.text ? !item.text.startsWith('_hidden_') : true; } }
+                                },
+                                title: { display: true, text: 'Simulated Data, Combined Fit, and CI Bands' }
+                            }
+                        }
+                    });
+                } else {
+                     // Draw placeholder on the canvas if no data
+                     dataFitCtx.clearRect(0, 0, dataFitCanvas.width, dataFitCanvas.height);
+                     dataFitCtx.textAlign = 'center';
+                     dataFitCtx.fillText('No data/fit to display', dataFitCanvas.width / 2, dataFitCanvas.height / 2);
+                }
+
+                // Component Chart
+                if (componentFitDatasets.length > 0 && componentFitDatasets.some(ds => ds.data.length > 0)) { // Check if array AND inner data exist
+                    // Decide on Y-axis scaling for component chart
+                    let compYAxisMin = yAxisMin; // Default to overall range
+                    let compYAxisMax = yAxisMax;
+                    // Optionally calculate separate range if needed
+
+                    componentFitChart = new Chart(componentFitCtx, {
+                        type: 'scatter',
+                        data: { datasets: componentFitDatasets },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: {
+                                x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } },
+                                y: { title: { display: true, text: 'Y' }, min: compYAxisMin, max: compYAxisMax } // Use chosen range
+                            },
+                            plugins: {
+                                legend: { position: 'top' },
+                                title: { display: true, text: 'Data and Individual Component Fits' }
+                            }
+                        }
+                    });
+                } else {
+                     // Draw placeholder on the canvas if no data
+                     componentFitCtx.clearRect(0, 0, componentFitCanvas.width, componentFitCanvas.height);
+                     componentFitCtx.textAlign = 'center';
+                     componentFitCtx.fillText('No component data to display (Enable \"Component Curves\" option?)', componentFitCanvas.width / 2, componentFitCanvas.height / 2);
+                }
+
+                // Residuals Chart
+                if (residualDatasets.length > 0) {
+                    residualsChart = new Chart(residualsCtx, {
+                        type: 'scatter',
+                        data: { datasets: residualDatasets },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: {
+                                x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } },
+                                y: { title: { display: true, text: 'Residual (y_data - y_fit) / ye' } }
+                            },
+                            plugins: {
+                                legend: { position: 'top' },
+                                title: { display: true, text: 'Fit Residuals' }
+                            }
+                        }
+                    });
+                } else {
+                     // Draw placeholder on the canvas if no data
+                     residualsCtx.clearRect(0, 0, residualsCanvas.width, residualsCanvas.height);
+                     residualsCtx.textAlign = 'center';
+                     residualsCtx.fillText('No residuals to display', residualsCanvas.width / 2, residualsCanvas.height / 2);
+                }
+
+            } catch (error) {
+                displayError(`Failed to update plots: ${error.message}`);
+                console.error("Plotting Error:", error);
             }
-
-            dataFitChart = new Chart(dataFitCtx, { type: 'scatter', data: { datasets: dataFitDatasets }, options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } }, y: { title: { display: true, text: 'Y' } } }, plugins: { legend: { position: 'top' }, title: { display: true, text: 'Simulated Data and Fit' } } } });
-            residualsChart = new Chart(residualsCtx, { type: 'scatter', data: { datasets: residualDatasets }, options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: 'X' } }, y: { title: { display: true, text: 'Residual (y_data - y_fit) / ye' } } }, plugins: { legend: { position: 'top' }, title: { display: true, text: 'Fit Residuals' } } } });
-        }
-
+        } // End updatePlots
 
         // --- Initial Setup ---
         document.addEventListener('DOMContentLoaded', () => {
-            // *** Initialize Bootstrap Modal ***
             infoModal = new bootstrap.Modal(document.getElementById('infoModal'));
-
-            // *** Start with one dataset block initially (as per original example) ***
             addDatasetBlock(0);
-            // Set default model (e.g., exponential)
             const initialSelect = datasetsContainer.querySelector('#dataset-0 .model-select');
-            if (initialSelect) initialSelect.value = 'exponential'; // Set default model
-            generateParameterUI(); // Generate initial table based on the single dataset/model
-
-            // --- Add Event Listeners ---
-            addDatasetBtn.addEventListener('click', () => {
-                 let nextIndex = 0; const existingIndices = new Set( Array.from(datasetsContainer.querySelectorAll('.dataset-block')).map(b => parseInt(b.id.split('-')[1])) );
-                 while (existingIndices.has(nextIndex)) nextIndex++;
-                 if (nextIndex < 20) addDatasetBlock(nextIndex); else alert("Max datasets (20) reached.");
-            });
+            if (initialSelect) initialSelect.value = 'gaussian'; // Changed default to Gaussian
+            generateParameterUI();
+            addDatasetBtn.addEventListener('click', () => { let nextIndex = 0; const existingIndices = new Set( Array.from(datasetsContainer.querySelectorAll('.dataset-block')).map(b => parseInt(b.id.split('-')[1])) ); while (existingIndices.has(nextIndex)) nextIndex++; if (nextIndex < 20) addDatasetBlock(nextIndex); else alert("Max datasets (20) reached."); });
             simulateBtn.addEventListener('click', simulateData);
             fitBtn.addEventListener('click', runFit);
             infoBtn.addEventListener('click', () => { infoModal.show(); });

@@ -6,14 +6,23 @@ Designed to run natively in modern web browsers or Node.js environments without 
 
 Code has been adapted from the original Fortran project Savuka: https://osmanbilsel.com/software/savuka-a-general-purpose-global-analysis-program/
 
-**Version:** 1.2.5
+**Version:** 1.2.6
 
+## What's New in 1.2.6
+- **Improved Logging**: Added a robust logging utility that respects the `logLevel` option (`none`, `error`, `warn`, `info`, `debug`).
+- **Enhanced Documentation**: Improved inline comments and organized code for better readability.
+- **Performance Optimizations**: Streamlined handling of large datasets and parameter structures.
+- **Simulation Functionality**: Added `simulateFromParams` to generate synthetic datasets based on model functions, parameters, and noise options (Gaussian or Poisson).
+- **Confidence Interval Support**: Added functionality to calculate confidence intervals for fitted model curves using the covariance matrix and Student's t-distribution.
+- **Bootstrap Fallback for Confidence Intervals**: Implemented a fallback mechanism to calculate confidence intervals using bootstrapping when the covariance matrix yields negative variances.
+- **SVD Fallback for Covariance Matrix**: Improved numerical stability by using SVD-based inversion for the covariance matrix, with regularization to handle ill-conditioned problems.
 
 ## CDN Script Tags
 ```html
-  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/svd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.5/dist/globalfit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.6/dist/svd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.6/dist/globalfit.min.js"></script>
 ```
+
 ## Features
 
 -   **Global Fitting:** Fit multiple datasets simultaneously with shared or independent parameters.
@@ -28,6 +37,9 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
 -   **Custom Logging:** Provides an option (`onLog` callback) for users to handle verbose fitting output.
 -   **Parameter Constraints:** Supports simple box constraints (min/max) and custom constraint functions.
 -   **Robust Cost Functions:** Optional use of L1 (Absolute Residual) or Lorentzian cost functions for outlier resistance.
+-   **Confidence Intervals:** Calculates confidence intervals for fitted model curves using the covariance matrix and Student's t-distribution.
+-   **Bootstrap Fallback for Confidence Intervals:** Automatically falls back to bootstrapping when the covariance matrix yields negative variances.
+-   **Simulation Functionality:** Generate synthetic datasets using `simulateFromParams` with support for Gaussian and Poisson noise.
 
 ## Advantages
 
@@ -35,6 +47,8 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
 -   **Model Discrimination:** Allows testing hypotheses where certain parameters are expected to be the same across different experimental conditions (datasets).
 -   **Flexibility:** Handles complex scenarios with multiple model components contributing to the overall signal for each dataset.
 -   **Portability:** Runs directly in the browser or Node.js without requiring complex build steps or external libraries for the core numerics.
+-   **Numerical Stability:** Uses SVD-based inversion for the covariance matrix with regularization to handle ill-conditioned problems.
+-   **Fallback Mechanisms:** Includes robust fallback mechanisms, such as bootstrapping for confidence intervals and SVD for covariance matrix inversion, ensuring reliable results even in challenging scenarios.
 
 ## Installation / Usage
 
@@ -135,6 +149,9 @@ Performs the global fit.
         -   `null`: Standard Least Squares (minimizes sum of `(residual)^2`). Assumes Gaussian noise.
         -   `1`: Absolute Residual / L1 Norm (minimizes sum of `|residual|`). More robust to outliers, assumes double-exponential noise distribution.
         -   `2`: Lorentzian / Cauchy-like (minimizes sum of `log(1 + 0.5 * residual^2)`). Highly robust to outliers, assumes Lorentzian/Cauchy noise.
+    -   `confidenceInterval` (`number`, default: `null`): Confidence level for calculating confidence intervals (e.g., `0.95` for 95% confidence intervals).
+    -   `numBootstrapSamples` (`number`, default: `200`): Number of bootstrap samples to use for confidence interval calculation if bootstrapping is enabled.
+    -   `bootstrapFallback` (`boolean`, default: `true`): Enable or disable bootstrap fallback for confidence intervals when the covariance matrix yields negative variances.
 
 **Returns:**
 
@@ -157,6 +174,8 @@ Performs the global fit.
     -   `bic` (`number`): Bayesian Information Criterion (`chiSquared + K*ln(N)`). Useful for model comparison (lower is better), penalizes parameters more heavily than AIC.
     -   `residualsPerSeries` (`number[][] | null`): Weighted residuals ((y-ymodel)/ye) for each dataset. `null` on failure.
     -   `fittedModelCurves` (`{x: number[], y: number[]}[] | null`): Calculated fitted model curves for each dataset if `options.calculateFittedModel` was set. `null` otherwise or on failure.
+    -   `ci_lower` (`{x: number[], y: number[]}[] | null`): Lower bounds of the confidence intervals for each dataset if `options.confidenceInterval` was set. `null` otherwise or on failure.
+    -   `ci_upper` (`{x: number[], y: number[]}[] | null`): Upper bounds of the confidence intervals for each dataset if `options.confidenceInterval` was set. `null` otherwise or on failure.
 
 ### `lmFit(data, modelFunction, initialParameters, options)`
 
@@ -268,7 +287,10 @@ const fitOptions = {
   onLog:  myLogger,
   fixMap:  fixMap,
   linkMap:  linkMap_newFormat, // Pass the new linkMap
-  covarianceLambda: 1e-9 // Optional regularization
+  covarianceLambda: 1e-9, // Optional regularization
+  confidenceInterval: 0.95, // 95% confidence intervals
+  numBootstrapSamples: 200, // Number of bootstrap samples for fallback
+  bootstrapFallback: true   // Enable bootstrap fallback
   // constraints: constraints, // Add constraints if needed
   // robustCostFunction: 1, // Example: Use L1 norm
 };
@@ -303,6 +325,10 @@ try {
 
     // Get the fixed Gaussian center value
     console.log("Fixed Gaussian center:", result.p_reconstructed[0][0][1]);
+
+    // Access confidence intervals
+    console.log("Confidence Intervals (Lower):", result.ci_lower);
+    console.log("Confidence Intervals (Upper):", result.ci_upper);
   }
 } catch (e) {
   console.error("Error during fitting process:", e);
@@ -320,7 +346,7 @@ try {
 
 ## MIT License
 
-Copyright (c) 2024 R. Paul Nobrega 
+Copyright (c) 2025 R. Paul Nobrega 
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
