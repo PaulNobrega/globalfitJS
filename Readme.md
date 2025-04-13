@@ -149,6 +149,7 @@ Performs the global fit.
     -   `confidenceInterval` (`number`, default: `null`): Confidence level for calculating confidence intervals (e.g., `0.95` for 95% confidence intervals).
     -   `numBootstrapSamples` (`number`, default: `200`): Number of bootstrap samples to use for confidence interval calculation if bootstrapping is enabled.
     -   `bootstrapFallback` (`boolean`, default: `true`): Enable or disable bootstrap fallback for confidence intervals when the covariance matrix yields negative variances.
+    -   `calculateComponentModels` (`boolean`, default: `false`): If `true`, calculates and returns the individual component model curves for each dataset and model function.
 
 **Returns:**
 
@@ -173,6 +174,10 @@ Performs the global fit.
     -   `fittedModelCurves` (`{x: number[], y: number[]}[] | null`): Calculated fitted model curves for each dataset if `options.calculateFittedModel` was set. `null` otherwise or on failure.
     -   `ci_lower` (`{x: number[], y: number[]}[] | null`): Lower bounds of the confidence intervals for each dataset if `options.confidenceInterval` was set. `null` otherwise or on failure.
     -   `ci_upper` (`{x: number[], y: number[]}[] | null`): Upper bounds of the confidence intervals for each dataset if `options.confidenceInterval` was set. `null` otherwise or on failure.
+    -   `fittedModelComponentCurves` (`Array<Array<{x: number[], y: number[]}>> | null`): 
+        -   Nested array of individual component model curves for each dataset and model function.
+        -   Each dataset contains an array of component curves, where each curve has `x` and `y` arrays representing the independent and dependent variable values, respectively.
+        -   Null if component curve calculation was not requested or failed.
 
 ### `lmFit(data, modelFunction, initialParameters, options)`
 
@@ -194,6 +199,46 @@ Fits multiple datasets **independently** by calling `lmFitGlobal` sequentially f
 -   `fixMap` and `constraints` apply per-dataset if provided in the full nested structure.
 -   `onLog` and `onProgress` callbacks receive an additional `datasetIndex` argument.
 -   Returns an **array** of result objects, one for each dataset fit.
+
+### `simulateFromParams(dataX, modelFunctions, parameters, options)`
+
+Simulates dependent variable (`y`) data based on provided independent variable (`x`) values, model functions, and parameters. Supports adding noise to the simulated data.
+
+**Parameters**:
+
+- `dataX` (`Array<Array<number>>`): Array of arrays of independent variable values (`x`) for each dataset.
+- `modelFunctions` (`Array<Array<Function>>`): Array of arrays of model functions. Each model function should accept parameters and an array of `x` values.
+- `parameters` (`Array<Array<Array<number>>>`): Nested array of parameter values for each model function in each dataset.
+- `options` (`object`, optional):
+  - `noiseStdDev` (`number | Array<number> | null`, default: `null`): Standard deviation for Gaussian noise. Used if `noiseType` is `'gaussian'`.
+  - `noiseType` (`string | Array<string>`, default: `'gaussian'`): Type of noise model to apply (`'gaussian'`, `'poisson'`, or `'none'`).
+  - `logFn` (`Function`, default: `console.log`): Function for logging warnings or errors during simulation.
+
+**Returns**:
+
+- An object containing:
+  - `x` (`number[][]`): The original `x` arrays.
+  - `y` (`number[][]`): The simulated dependent variable (`y`) arrays.
+
+**Example Usage**:
+
+```javascript
+const dataX = [[0, 1, 2], [0, 1, 2, 3]];
+const modelFunctions = [
+  [(params, x) => x.map(xi => params[0] * xi + params[1])],
+  [(params, x) => x.map(xi => params[0] * Math.sin(params[1] * xi))]
+];
+const parameters = [[[2, 1]], [[1, Math.PI]]];
+
+const options = {
+  noiseStdDev: [0.1, 0.2],
+  noiseType: ['gaussian', 'poisson'],
+  logFn: (msg, level) => console.log(`[${level}] ${msg}`)
+};
+
+const simulatedData = simulateFromParams(dataX, modelFunctions, parameters, options);
+console.log(simulatedData);
+```
 
 ## Example Usage
 
@@ -287,7 +332,8 @@ const fitOptions = {
   covarianceLambda: 1e-9, // Optional regularization
   confidenceInterval: 0.95, // 95% confidence intervals
   numBootstrapSamples: 200, // Number of bootstrap samples for fallback
-  bootstrapFallback: true   // Enable bootstrap fallback
+  bootstrapFallback: true,   // Enable bootstrap fallback
+  calculateComponentModels: true // Enable component model curve calculation
   // constraints: constraints, // Add constraints if needed
   // robustCostFunction: 1, // Example: Use L1 norm
 };
@@ -326,6 +372,16 @@ try {
     // Access confidence intervals
     console.log("Confidence Intervals (Lower):", result.ci_lower);
     console.log("Confidence Intervals (Upper):", result.ci_upper);
+
+    // Access individual component model curves
+    if (result.fittedModelComponentCurves) {
+      result.fittedModelComponentCurves.forEach((datasetComponents, datasetIndex) => {
+        console.log(`Dataset ${datasetIndex} Component Curves:`);
+        datasetComponents.forEach((componentCurve, componentIndex) => {
+          console.log(`  Component ${componentIndex}:`, componentCurve);
+        });
+      });
+    }
   }
 } catch (e) {
   console.error("Error during fitting process:", e);

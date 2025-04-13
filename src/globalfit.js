@@ -1043,6 +1043,7 @@ async function calculateBootstrapCIBands(
      *   @property {number[][] | null} residualsPerSeries - Weighted residuals ((y-ymodel)/ye) for each dataset.
      *   @property {Array<{x: number[], y: number[], ci_lower?: number[], ci_upper?: number[]}> | null} fittedModelCurves - Calculated fitted model curves for each dataset, potentially including confidence interval bands (`ci_lower`, `ci_upper`) if `options.confidenceInterval` was valid.
      *   @property {boolean} bootstrapUsed - True if bootstrap fallback was used for CI bands.
+     *   @property {Array<Array<{x: number[], y: number[]}>> | null} fittedModelComponentCurves - Nested array of individual component model curves for each dataset and model function. Each dataset contains an array of component curves, where each curve has `x` and `y` arrays representing the independent and dependent variable values, respectively. Null if component curve calculation was not requested or failed.
      */
     async function lmFitGlobal(data, modelFunction, initialParameters, options = {}) {
         const logFn = options.onLog && typeof options.onLog === 'function' ? options.onLog : () => {};
