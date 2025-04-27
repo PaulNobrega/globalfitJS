@@ -6,9 +6,10 @@ Designed to run natively in modern web browsers or Node.js environments without 
 
 Code has been adapted from the original Fortran project Savuka: https://osmanbilsel.com/software/savuka-a-general-purpose-global-analysis-program/
 
-**Version:** 1.2.7
+**Version:** 1.2.8
 
-## What's New in 1.2.7
+## What's New in 1.2.8
+- **`model_x_range` Option**: Allows users to specify custom x-ranges for plotting fitted curves and confidence intervals, enabling extrapolation beyond the raw data range.
 - **Improved Logging**: Added a robust logging utility that respects the `logLevel` option (`none`, `error`, `warn`, `info`, `debug`).
 - **Enhanced Documentation**: Improved inline comments and organized code for better readability.
 - **Performance Optimizations**: Streamlined handling of large datasets and parameter structures.
@@ -19,7 +20,7 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
 
 ## CDN Script Tags
 ```html
-  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.7/dist/globalfit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.8/dist/globalfit.min.js"></script>
 ```
 
 ## Features
@@ -70,7 +71,7 @@ Code has been adapted from the original Fortran project Savuka: https://osmanbil
       <!-- <script src="path/to/globalfit.js"></script> -->
 
       <!-- Option 2: CDN (Recommended) -->
-      <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.7/dist/globalfit.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/gh/PaulNobrega/globalfitJS@v1.2.8/dist/globalfit.min.js"></script>
       <script>
         // Your code to use lmFitGlobal here
       </script>
@@ -99,11 +100,55 @@ const options = { /* ... */ };
 const result = lmFitGlobal(data, modelFunction, initialParameters, options);
 
 console.log(result);
-
-
-**Section 5: API Reference (`lmFitGlobal` Parameters)**
-
 ```
+
+## Usage
+
+### Example: Using `model_x_range` for Extrapolation
+
+The `model_x_range` option allows you to specify a custom x-range for each dataset. This is particularly useful for extrapolating fitted curves and confidence intervals beyond the raw data range.
+
+#### Input Structure
+`model_x_range` is an array where each element corresponds to a dataset. Each element is either:
+- `null` (to use the raw data range), or
+- An array `[xmin, xmax]` specifying the custom range.
+
+#### Example Code
+```javascript
+const data = {
+    x: [[0, 1, 2, 3, 4, 5]], // Independent variable values for one dataset
+    y: [[1.2, 2.3, 3.1, 4.0, 5.1, 6.2]], // Dependent variable values
+    ye: [[0.1, 0.1, 0.1, 0.1, 0.1, 0.1]] // Errors for y
+};
+
+const modelFunction = [
+    [function linearModel(params, x) {
+        return [params[0] * x[0] + params[1]]; // y = m*x + c
+    }]
+];
+
+const initialParameters = [[[1, 0]]]; // Initial guesses for slope (m) and intercept (c)
+
+const options = {
+    model_x_range: [[-5, 10]], // Extrapolate from x = -5 to x = 10
+    confidenceInterval: 0.95, // Calculate 95% CI bands
+    calculateFittedModel: { numPoints: 300 }, // Smooth fitted curve
+    logLevel: 'info'
+};
+
+lmFitGlobal(data, modelFunction, initialParameters, options)
+    .then(result => {
+        console.log("Fitted Parameters:", result.p_reconstructed);
+        console.log("Fitted Model Curves:", result.fittedModelCurves);
+    })
+    .catch(error => {
+        console.error("Fit failed:", error);
+    });
+```
+
+#### Output
+- The fitted curve and confidence intervals will be calculated over the range `[-5, 10]` for the dataset.
+- If `model_x_range` is not specified or set to `null`, the range will default to the raw data range.
 
 ## API Reference
 
@@ -150,6 +195,9 @@ Performs the global fit.
     -   `numBootstrapSamples` (`number`, default: `200`): Number of bootstrap samples to use for confidence interval calculation if bootstrapping is enabled.
     -   `bootstrapFallback` (`boolean`, default: `true`): Enable or disable bootstrap fallback for confidence intervals when the covariance matrix yields negative variances.
     -   `calculateComponentModels` (`boolean`, default: `false`): If `true`, calculates and returns the individual component model curves for each dataset and model function.
+    -   **`model_x_range`** (`Array<number[]> | null`, default: `null`): Specifies custom x-ranges for each dataset. Each element is either:
+      - `null` (to use the raw data range), or
+      - An array `[xmin, xmax]` specifying the custom range for extrapolation.
 
 **Returns:**
 
@@ -333,7 +381,8 @@ const fitOptions = {
   confidenceInterval: 0.95, // 95% confidence intervals
   numBootstrapSamples: 200, // Number of bootstrap samples for fallback
   bootstrapFallback: true,   // Enable bootstrap fallback
-  calculateComponentModels: true // Enable component model curve calculation
+  calculateComponentModels: true, // Enable component model curve calculation
+  model_x_range: [[-5, 10]] // Extrapolate from x = -5 to x = 10
   // constraints: constraints, // Add constraints if needed
   // robustCostFunction: 1, // Example: Use L1 norm
 };

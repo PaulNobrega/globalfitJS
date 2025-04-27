@@ -1,6 +1,6 @@
 {
   "name": "globalfitjs",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "description": "Levenberg-Marquardt global fitter in pure JS",
   "main": "dist/globalfit.js",
   "files": [
@@ -23,7 +23,7 @@
     "optimization",
     "global fitting"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "R. Paul Nobrega <Paul@PaulNobrega.net>",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/PaulNobrega/globalfitJS/issues"

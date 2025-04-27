@@ -228,7 +228,7 @@
  * Includes helpers for parameter mapping, chi-squared calculation, Jacobian calculation,
  * constraint application, statistics calculation, and optional confidence interval bands for fitted curves.
  * Depends on svd.js for linear algebra operations.
- * Version: 1.2.6 (Adds optional bootstrapping fallback for CI bands)
+ * Version: 1.2.8 (Adds model_x_range option)
  */
 
 (function(global) {
@@ -639,7 +639,7 @@
                 if (!isFinite(combinedModelValue)) { logFn(`Non-finite model value pt ${ptIdx} ds ${dsIdx}. Skipping.`, 'warn'); continue; }
                 const residual = (yPoint - combinedModelValue) / yePoint;
                 if (robustCostFunction === 1) chiSquared += Math.abs(residual);
-                else if (robustCostFunction === 2) chiSquared += Math.log(1 + 0.5 * (residual * residual));
+                else if (robustCostFunction === 2) chiSquared += Math.log(1 + 0.5 (residual * residual));
                 else chiSquared += residual * residual;
             }
         });
@@ -751,6 +751,66 @@
         return errorOccurred ? null : residualsPerSeries;
     }
 
+    // --- NEW: Helper to determine X range ---
+    /**
+     * Determines the appropriate x-range for curve calculation.
+     * @param {number[]} seriesXData - The original x-data for the dataset.
+     * @param {Array<number> | null | undefined} modelXRangeSeries - The user-provided range [min, max] for this series.
+     * @param {number} seriesIndex - The index of the dataset.
+     * @param {Function} logFn - Logging function.
+     * @returns {{min: number, max: number} | null} - The determined range or null if invalid.
+     * @private
+     */
+    function _determineXRange(seriesXData, modelXRangeSeries, seriesIndex, logFn) {
+        let xMin = null, xMax = null;
+
+        // 1. Try user-provided range
+        if (modelXRangeSeries && Array.isArray(modelXRangeSeries) && modelXRangeSeries.length === 2) {
+            const minR = Number(modelXRangeSeries[0]);
+            const maxR = Number(modelXRangeSeries[1]);
+            if (isFinite(minR) && isFinite(maxR) && minR <= maxR) {
+                xMin = minR;
+                xMax = maxR;
+                logFn(`Using provided x-range [${xMin}, ${xMax}] for series ${seriesIndex} curve.`, 'debug');
+            } else {
+                logFn(`Provided model_x_range for series ${seriesIndex} is invalid [${modelXRangeSeries[0]}, ${modelXRangeSeries[1]}]. Falling back to data range.`, 'warn');
+            }
+        } else if (modelXRangeSeries !== null && modelXRangeSeries !== undefined) {
+             logFn(`Provided model_x_range for series ${seriesIndex} is not an array of two numbers. Falling back to data range.`, 'warn');
+        }
+
+        // 2. Fallback to data range
+        if (xMin === null || xMax === null) {
+            logFn(`Determining x-range from data for series ${seriesIndex} curve.`, 'debug');
+            if (seriesXData && seriesXData.length > 0) {
+                try {
+                    // Ensure data is numeric before min/max
+                    const numericX = seriesXData.filter(x => isFinite(x));
+                    if (numericX.length > 0) {
+                        xMin = Math.min(...numericX);
+                        xMax = Math.max(...numericX);
+                    } else {
+                         logFn(`No finite x-data found for series ${seriesIndex}. Cannot determine data range.`, 'error');
+                         return null;
+                    }
+                } catch (e) {
+                     logFn(`Error determining data range for series ${seriesIndex}: ${e.message}`, 'error');
+                     return null;
+                }
+            } else {
+                xMin = 0.0; xMax = 0.0; // Default for empty data
+            }
+        }
+
+        // Final check
+        if (xMin === null || xMax === null || !isFinite(xMin) || !isFinite(xMax)) {
+             logFn(`Could not determine valid x-range for series ${seriesIndex}.`, 'error');
+             return null;
+        }
+
+        return { min: xMin, max: xMax };
+    }
+    
     /**
      * Calculates the fitted model curve AND optional confidence interval bands using Hessian/Covariance.
      * Includes enhanced checks for inputs and calculation results.
@@ -759,7 +819,8 @@
      */
     function calculateFittedModelCurves(
         data, modelFunction, finalReconstructedParams, numPoints, logFn,
-        confidenceLevel, finalActiveParams, covarianceMatrix, activeParamInfo, reconstructParams, epsilon, degreesOfFreedom, K
+        confidenceLevel, finalActiveParams, covarianceMatrix, activeParamInfo, reconstructParams, epsilon, degreesOfFreedom, K,
+        model_x_range_list // <<< ADDED: List of optional ranges
     ) {
 
         // --- Input Validation ---
@@ -819,20 +880,16 @@
                     }
                 }
 
-                let xMin = Infinity, xMax = -Infinity;
-                if (xDataset.length > 0) {
-                    xMin = xDataset[0]; xMax = xDataset[0];
-                    for (let i = 1; i < xDataset.length; ++i) {
-                        if (xDataset[i] < xMin) xMin = xDataset[i];
-                        if (xDataset[i] > xMax) xMax = xDataset[i];
-                    }
-                }
-                if (!isFinite(xMin) || !isFinite(xMax) || (xDataset.length > 0 && xMax < xMin)) {
-                    logFn(`Invalid or empty X range [${xMin}, ${xMax}] for dataset ${dsIdx}. Skipping curve calculation.`, 'warn');
-                    fittedCurves.push(null);
+                // --- Determine X Range using helper ---
+                const currentSeriesRangeOpt = model_x_range_list?.[dsIdx] ?? null;
+                const xRange = _determineXRange(xDataset, currentSeriesRangeOpt, dsIdx, logFn);
+                if (xRange === null) {
+                    logFn(`Invalid X range for dataset ${dsIdx}. Skipping curve calculation.`, 'warn');
+                    fittedCurves.push(null); 
                     return;
                 }
-                if (xDataset.length === 0) xMin = xMax = 0;
+                const { min: xMin, max: xMax } = xRange;
+                // --- End Determine X Range ---
 
                 const dx = (xMax === xMin || numPoints <= 1) ? 0 : (xMax - xMin) / (numPoints - 1);
 
@@ -961,7 +1018,8 @@
      */
 async function calculateBootstrapCIBands(
     originalData, modelFunction, finalReconstructedParams, activeParamInfo, reconstructParams, paramStructure,
-    numBootstrapSamples, confidenceLevel, numPointsForCurve, logFn, baseOptions
+    numBootstrapSamples, confidenceLevel, numPointsForCurve, logFn, baseOptions,
+    model_x_range_list // <<< ADDED
 ) {
     logFn(`--- Starting Bootstrap CI Calculation (${numBootstrapSamples} samples) ---`, 'info');
 
@@ -982,7 +1040,8 @@ async function calculateBootstrapCIBands(
          const dummyLogFn = () => {};
          const originalCurveResult = calculateFittedModelCurves(
              originalData, modelFunction, finalReconstructedParams, numPointsForCurve, dummyLogFn,
-             null, [], null, [], reconstructParams, 0, 0 // Dummy values, reconstruct shouldn't be needed for y(x) only
+             null, [], null, [], reconstructParams, 0, 0, 0, // Dummy values
+             model_x_range_list // Pass the range list
          );
          if (!originalCurveResult || !originalCurveResult.curves) { throw new Error(`Failed to calculate original curve shape (result: ${originalCurveResult})`); }
          if (originalCurveResult.curves.length !== numDatasets) { throw new Error(`Original curve calculation returned ${originalCurveResult.curves.length} curves, but expected ${numDatasets}.`); }
@@ -1015,7 +1074,7 @@ async function calculateBootstrapCIBands(
         logLevel: 'error', // Reduce verbosity during bootstrap fits
         onLog: (msg, level) => {
             // Only log errors/warnings from inner fits, referencing the sample number
-            if (level === 'error' || level === 'warn') {
+            if (level === 'error' || 'warn') {
                 // Use i_loop here
                 logFn(`Bootstrap Fit [Sample ${i_loop + 1}] ${level.toUpperCase()}: ${msg}`, 'warn');
             }
@@ -1069,7 +1128,13 @@ async function calculateBootstrapCIBands(
              }
 
             // Use finalReconstructedParams from original fit as initial guess for speed
-            bootResult = await lmFitGlobal(bootstrapData, modelFunction, finalReconstructedParams, bootstrapOptions);
+            bootResult = await lmFitGlobal(bootstrapData, modelFunction, finalReconstructedParams, {
+                ...baseOptions,
+                calculateFittedModel: { numPoints: numPointsForCurve },
+                model_x_range: model_x_range_list, // <<< Ensure model_x_range is passed here
+                confidenceInterval: null,
+                logLevel: 'error',
+            });
 
             // 3. Collect results if successful
             if (bootResult && bootResult.converged && !bootResult.error && bootResult.fittedModelCurves) {
@@ -1265,6 +1330,7 @@ async function calculateBootstrapCIBands(
      *   @property {number[][] | null} residualsPerSeries - Weighted residuals ((y-ymodel)/ye) for each dataset.
      *   @property {Array<{x: number[], y: number[], ci_lower?: number[], ci_upper?: number[]}> | null} fittedModelCurves - Calculated fitted model curves for each dataset, potentially including confidence interval bands (`ci_lower`, `ci_upper`) if `options.confidenceInterval` was valid.
      *   @property {boolean} bootstrapUsed - True if bootstrap fallback was used for CI bands.
+     *   @property {Array<Array<{x: number[], y: number[]}>> | null} fittedModelComponentCurves - Nested array of individual component model curves for each dataset and model function. Each dataset contains an array of component curves, where each curve has `x` and `y` arrays representing the independent and dependent variable values, respectively. Null if component curve calculation was not requested or failed.
      */
     async function lmFitGlobal(data, modelFunction, initialParameters, options = {}) {
         const logFn = options.onLog && typeof options.onLog === 'function' ? options.onLog : () => {};
@@ -1304,6 +1370,9 @@ async function calculateBootstrapCIBands(
             }
         }
 
+        // --- Model X Range List Option ---
+        const model_x_range_list = options.model_x_range ?? null;
+
         log("Starting lmFitGlobal (v1.2.6 - Added CI Bands)..."); // Update version marker
 
         // --- Calculate Total Data Points (N) ---
@@ -1337,7 +1406,7 @@ async function calculateBootstrapCIBands(
                 if (shouldCalculateFitted) {
                     // Call with nulls/zeros for CI-related params as they aren't applicable
                     fittedCurves = calculateFittedModelCurves(data, modelFunction, initialReconstructed, numPointsForCurve, log,
-                                                            null, [], null, [], reconstructParams, epsilon, dof, 0); // K=0
+                                                            null, [], null, [], reconstructParams, epsilon, dof, 0, model_x_range_list); // K=0
                  }
                 finalErrors = []; let currentFlatIdx_err = 0;
                 paramStructure.forEach((dsStruct, dsIdx) => { finalErrors[dsIdx] = []; dsStruct.forEach((pLen, pIdx) => { finalErrors[dsIdx][pIdx] = []; for (let vIdx = 0; vIdx < pLen; vIdx++) { finalErrors[dsIdx][pIdx][vIdx] = 0; currentFlatIdx_err++; } }); });
@@ -1351,7 +1420,7 @@ async function calculateBootstrapCIBands(
         let activeParameters = [...activeInitialParams];
         let chiSquared = NaN;
         try { chiSquared = calculateChiSquaredGlobal(data, modelFunction, reconstructParams, activeParameters, robustCostFunction, paramStructure, log); }
-        catch (error) { const errMsg = `Initial Chi-Squared calculation failed: ${error.message}`; log(errMsg, 'error'); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), error: errMsg }; }
+        catch (error) { const errMsg = `Initial Chi-Squared calculation failed: ${error.message}`; log(`Non-finite initial Chi-Squared.`, 'error'); return { ...baseErrorReturn, p_reconstructed: reconstructParams(activeParameters), chiSquared: chiSquared, error: errMsg }; }
 
         let converged = false; let covarianceMatrix = null; let parameterErrors = []; let iterationsPerformed = 0; let finalHessian = null;
 
@@ -1455,9 +1524,8 @@ async function calculateBootstrapCIBands(
         catch (error) { log(`Failed to calculate final residuals: ${error.message}`, 'error'); }
 
         // --- Calculate Fitted Model Curves (potentially with CI) ---
-        let fittedCurves = null;
-        let negativeVarianceEncountered = false;
-        let bootstrapUsed = false; // <<< New flag for result object
+        let fittedCurvesResult = null; // Store the object {curves, negativeVarianceEncountered}
+        let bootstrapUsed = false;
 
         if (shouldCalculateFitted) {
              log(`Calculating fitted model curves with ${numPointsForCurve} points...`, 'info');
@@ -1472,12 +1540,12 @@ async function calculateBootstrapCIBands(
                     reconstructParams, // Needed for evaluating perturbed models
                     epsilon, // Step size for differentiation
                     degreesOfFreedom, // Needed for t-value
-                    K // Number of active parameters
+                    K, // Number of active parameters
+                    model_x_range_list // Pass the model_x_range_list option
                 );
-                fittedCurves = standardResult.curves;
-                negativeVarianceEncountered = standardResult.negativeVarianceEncountered;
+                fittedCurvesResult = standardResult;
 
-                if (bootstrapFallback && confidenceLevel !== null && negativeVarianceEncountered) {
+                if (bootstrapFallback && confidenceLevel !== null && standardResult.negativeVarianceEncountered) {
                     log("Negative variance detected... Attempting bootstrap fallback...", 'warn');
                     bootstrapUsed = true;
 
@@ -1489,19 +1557,20 @@ async function calculateBootstrapCIBands(
 
                     const bootstrapCurveResult = await calculateBootstrapCIBands(
                         data, modelFunction, finalReconstructedParams, activeParamInfo, reconstructParams, paramStructure,
-                        numBootstrapSamples, confidenceLevel, numPointsForCurve, log, baseOptionsForBootstrap
+                        numBootstrapSamples, confidenceLevel, numPointsForCurve, log, baseOptionsForBootstrap,
+                        model_x_range_list // Pass the range list
                     );
 
                     if (bootstrapCurveResult) {
                         log("Bootstrap CI calculation completed. Using bootstrap bands.", 'info');
-                        fittedCurves = bootstrapCurveResult;
+                        fittedCurvesResult = { curves: bootstrapCurveResult, negativeVarianceEncountered: false };
                     } else {
                         log("Bootstrap CI calculation failed. Retaining standard results.", 'error');
                     }
                 }
              } catch (curveError) {
                 log(`Failed to calculate fitted model curves: ${curveError.message}`, 'error');
-                fittedCurves = null; // Ensure it's null on error
+                fittedCurvesResult = { curves: null, negativeVarianceEncountered: false };
              }
         }
 
@@ -1518,7 +1587,8 @@ async function calculateBootstrapCIBands(
                         finalReconstructedParams,
                         data,
                         numPointsForCurve,
-                        log
+                        log,
+                        model_x_range_list // Pass the model_x_range_list option
                     );
                     if (fittedModelComponentCurves === null) {
                         log("Component curve calculation failed or returned null.", 'warn');
@@ -1541,7 +1611,7 @@ async function calculateBootstrapCIBands(
             p_active: activeParameters, p_reconstructed: finalReconstructedParams, finalParamErrors,
             chiSquared, covarianceMatrix, parameterErrors, iterations: iterationsPerformed, converged,
             activeParamLabels, error: null, totalPoints, degreesOfFreedom, reducedChiSquared,
-            aic, aicc, bic, residualsPerSeries: finalResiduals, fittedModelCurves: fittedCurves, // Contains CI bands if calculated
+            aic, aicc, bic, residualsPerSeries: finalResiduals, fittedModelCurves: fittedCurvesResult?.curves ?? null, // Contains CI bands if calculated
             bootstrapUsed: bootstrapUsed, // <<< Add the flag to the result
             fittedModelComponentCurves: fittedModelComponentCurves // Add component curves to the result
         };
@@ -1555,11 +1625,13 @@ async function calculateBootstrapCIBands(
      * @param {object} data - Original data object (used for x-ranges).
      * @param {number} numPoints - Number of points for the curve calculation.
      * @param {Function} onLog - Logging function.
+     * @param {Array<number[]>} model_x_range_list - List of optional ranges
      * @returns {Array<Array<{x: number[], y: number[]}>> | null} - Nested array [dsIdx][modelIdx] of curve objects, or null on error.
      * @private
      */
     function calculateComponentCurves(
-        modelFunctionStructure, finalReconstructedParams, data, numPoints, onLog
+        modelFunctionStructure, finalReconstructedParams, data, numPoints, onLog,
+        model_x_range_list // <<< ADDED
     ) {
         const logFn = (message, level) => { if (onLog) onLog(message, level); else console.log(`[${level}] ${message}`); };
         logFn("Calculating individual component model curves...", 'info');
@@ -1591,17 +1663,15 @@ async function calculateBootstrapCIBands(
                 }
                 const xDataset = data.x[dsIdx];
 
-                // --- Determine X Range for this dataset ---
-                let xMin = Infinity, xMax = -Infinity;
-                if (xDataset.length > 0) {
-                    xMin = Math.min(...xDataset);
-                    xMax = Math.max(...xDataset);
+                // --- Determine X Range using helper ---
+                const currentSeriesRangeOpt = model_x_range_list?.[dsIdx] ?? null;
+                const xRange = _determineXRange(xDataset, currentSeriesRangeOpt, dsIdx, logFn);
+                if (xRange === null) {
+                    logFn(`Invalid X range for dataset ${dsIdx}. Skipping component curves.`, 'warn');
+                    allComponentCurves[dsIdx] = new Array(datasetModels.length).fill(null); return;
                 }
-                if (!isFinite(xMin) || !isFinite(xMax) || (xDataset.length > 0 && xMax < xMin)) {
-                    logFn(`Invalid or empty X range [${xMin}, ${xMax}] for dataset ${dsIdx}. Skipping component curves.`, 'warn');
-                    return;
-                }
-                if (xDataset.length === 0) xMin = xMax = 0;
+                const { min: xMin, max: xMax } = xRange;
+                // --- End Determine X Range ---
 
                 const dx = (xMax === xMin || numPoints <= 1) ? 0 : (xMax - xMin) / (numPoints - 1);
 
@@ -1622,7 +1692,7 @@ async function calculateBootstrapCIBands(
                     const componentCurve = { x: [], y: [] };
                     let componentError = false;
 
-                    // --- Calculate points for this component curve ---
+                    // --- Calculate points over determined range ---
                     for (let i = 0; i < numPoints; i++) {
                         const xCalc = (dx === 0) ? xMin : xMin + i * dx;
                         let yComp = NaN;
@@ -1671,6 +1741,17 @@ async function calculateBootstrapCIBands(
         if (options.linkMap && (!Array.isArray(options.linkMap[0]) || !Array.isArray(options.linkMap[0][0]) || !Array.isArray(options.linkMap[0][0][0]))) {
              wrappedOptions.linkMap = [options.linkMap];
         }
+        // --- Wrap model_x_range ---
+        if (options.model_x_range && Array.isArray(options.model_x_range) && options.model_x_range.length === 2) {
+            // If user provided a single tuple [min, max], wrap it in a list
+            wrappedOptions.model_x_range = [options.model_x_range];
+        } else if (options.model_x_range === null || options.model_x_range === undefined) {
+            wrappedOptions.model_x_range = [null]; // Explicitly wrap null
+        } else {
+            // If it's already a list or invalid, pass it as is (lmFitGlobal will handle/warn)
+            wrappedOptions.model_x_range = options.model_x_range;
+        }
+        // --- End wrap model_x_range ---
         // confidenceInterval option is passed directly in wrappedOptions
         return { data: wrappedData, modelFunction: wrappedModelFunction, initialParameters: wrappedInitialParams, options: wrappedOptions };
     }
@@ -1692,7 +1773,28 @@ async function calculateBootstrapCIBands(
          const initialParamsNested = modelFuncArray.length === 1 && initialParameters.length > 0 && !Array.isArray(initialParameters[0]) ? [initialParameters] : initialParameters;
          const { data: wrappedData, modelFunction: wrappedModelFunc, initialParameters: wrappedInitialParams, options: wrappedOptions } = wrapSingleDatasetInput(data, modelFuncArray, initialParamsNested, options);
          const result = await lmFitGlobal(wrappedData, wrappedModelFunc, wrappedInitialParams, wrappedOptions); // <<< Added await
-         // Unpack results slightly for single dataset? Maybe not necessary, keep consistent with lmFitGlobal.
+         // --- Unwrap results for single dataset ---
+         if (result && !result.error) {
+             // Fitted curves / CIs are already a list, just take the first element
+             if (result.fittedModelCurves && Array.isArray(result.fittedModelCurves)) {
+                 result.fittedModelCurves = result.fittedModelCurves[0] ?? null; // Get first curve object or null
+             }
+             // Component curves: unwrap outer list
+             if (result.fittedModelComponentCurves && Array.isArray(result.fittedModelComponentCurves)) {
+                 result.fittedModelComponentCurves = result.fittedModelComponentCurves[0] ?? null; // Get list of components for the first dataset
+             }
+             // Residuals: unwrap outer list
+             if (result.residualsPerSeries && Array.isArray(result.residualsPerSeries)) {
+                 result.residualsPerSeries = result.residualsPerSeries[0] ?? null;
+             }
+             // Params: unwrap outer list
+             if (result.p_reconstructed && Array.isArray(result.p_reconstructed)) {
+                 result.p_reconstructed = result.p_reconstructed[0] ?? null;
+             }
+             if (result.finalParamErrors && Array.isArray(result.finalParamErrors)) {
+                 result.finalParamErrors = result.finalParamErrors[0] ?? null;
+             }
+         }
          return result;
     }
 
@@ -1737,6 +1839,13 @@ async function calculateBootstrapCIBands(
             singleOptions.onLog = (message, level) => { rootOnLog(message, level, datasetIndex); }; singleOptions.onProgress = (progressData) => { rootOnProgress(progressData, datasetIndex); };
             // Wrap the single dataset inputs for lmFitGlobal
             const { data: wrappedData, modelFunction: wrappedModelFunc, initialParameters: wrappedInitialParams, options: wrappedOptions } = wrapSingleDatasetInput(singleData, singleModelFunc, singleInitialParams, singleOptions);
+            // --- Extract model_x_range for this dataset ---
+            if (options.model_x_range && Array.isArray(options.model_x_range) && options.model_x_range.length > i) {
+                singleOptions.model_x_range = options.model_x_range[i]; // Pass the specific tuple or null
+            } else {
+                delete singleOptions.model_x_range; // Remove if structure is wrong
+            }
+            // ---
             try { const result = await lmFitGlobal(wrappedData, wrappedModelFunc, wrappedInitialParams, wrappedOptions); allResults.push(result); } // <<< Added await
             catch (error) { logFnLoop(`Error fitting dataset ${datasetIndex}: ${error.message}`, 'error'); allResults.push({ error: `Fit failed: ${error.message}`, converged: false, p_active: [], p_reconstructed: singleInitialParams, finalParamErrors: null, chiSquared: NaN, covarianceMatrix: null, parameterErrors: [], iterations: 0, activeParamLabels: [], totalPoints: singleData.x?.length ?? 0, degreesOfFreedom: NaN, reducedChiSquared: NaN, aic: NaN, aicc: NaN, bic: NaN, residualsPerSeries: null, fittedModelCurves: null }); }
             logFnLoop(`--- Finished Independent Fit for Dataset ${datasetIndex} ---`, 'info');
@@ -1796,7 +1905,7 @@ async function calculateBootstrapCIBands(
  * @param {Array<Array<number>>} dataX - Array of arrays of independent variable values (x points) for each dataset.
  *                                       Defines the points at which to simulate y values.
  * @param {Array<Array<Function>>} modelFunctions - Array of arrays of model functions. Structure must match `parameters`.
- * @param {Array<Array<Array<number>>>} parameters - Nested array of parameter values to use for the simulation.
+ * @param {Array<Array<Array<number>>> parameters - Nested array of parameter values to use for the simulation.
  * @param {object} [options={}] - Optional configuration for noise.
  *   @param {number | Array<number> | null} [options.noiseStdDev=null] - Standard deviation for Gaussian noise (mean=0). Used if noiseType is 'gaussian'.
  *   @param {string | Array<string>} [options.noiseType='gaussian'] - Type of noise model ('gaussian', 'poisson', 'none').
